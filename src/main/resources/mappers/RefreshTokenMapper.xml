@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.example.snake_back.mapper.RefreshTokenMapper">
+
+    <!-- 映射 DB 列到 RefreshToken POJO 字段 -->
+    <resultMap id="RefreshTokenResultMap" type="com.example.snake_back.pojo.entity.RefreshToken">
+        <id column="id" property="id" />
+        <result column="user_id" property="userId" />
+        <result column="token_hash" property="tokenHash" />
+        <result column="issued_at" property="issuedAt" />
+        <result column="expires_at" property="expiresAt" />
+        <result column="revoked" property="revoked" />
+        <result column="revoked_at" property="revokedAt" />
+        <result column="replaced_by" property="replacedBy" />
+        <result column="device_info" property="deviceInfo" />
+        <result column="ip" property="ip" />
+        <result column="last_used_at" property="lastUsedAt" />
+        <result column="created_at" property="createdAt" />
+        <result column="updated_at" property="updatedAt" />
+    </resultMap>
+
+    <!-- 根据 token_hash 精确查找（不加锁） -->
+    <select id="selectByTokenHash" resultMap="RefreshTokenResultMap" parameterType="string">
+        SELECT id, user_id, token_hash, issued_at, expires_at, revoked, revoked_at,
+               replaced_by, device_info, ip, last_used_at, created_at, updated_at
+        FROM refresh_tokens
+        WHERE token_hash = #{tokenHash}
+            LIMIT 1
+    </select>
+
+    <!-- 在事务中使用 FOR UPDATE 锁定行（用于 validateAndRotate） -->
+    <select id="selectByTokenHashForUpdate" resultMap="RefreshTokenResultMap" parameterType="string">
+        SELECT id, user_id, token_hash, issued_at, expires_at, revoked, revoked_at,
+               replaced_by, device_info, ip, last_used_at, created_at, updated_at
+        FROM refresh_tokens
+        WHERE token_hash = #{tokenHash}
+            LIMIT 1 FOR UPDATE
+    </select>
+
+    <!-- 根据 id 查询（可选） -->
+    <select id="selectById" resultMap="RefreshTokenResultMap" parameterType="string">
+        SELECT id, user_id, token_hash, issued_at, expires_at, revoked, revoked_at,
+               replaced_by, device_info, ip, last_used_at, created_at, updated_at
+        FROM refresh_tokens
+        WHERE id = #{id}
+            LIMIT 1
+    </select>
+
+    <!-- 插入新记录（使用你生成的 id，而非数据库自增） -->
+    <insert id="insert" parameterType="com.example.snake_back.pojo.entity.RefreshToken">
+        INSERT INTO refresh_tokens
+        (id, user_id, token_hash, issued_at, expires_at, revoked, revoked_at,
+         replaced_by, device_info, ip, last_used_at, created_at, updated_at)
+        VALUES
+            (#{id}, #{userId}, #{tokenHash}, #{issuedAt}, #{expiresAt}, #{revoked}, #{revokedAt},
+             #{replacedBy}, #{deviceInfo}, #{ip}, #{lastUsedAt}, #{createdAt}, #{updatedAt})
+    </insert>
+
+    <!-- 根据 id 更新记录（updateById） -->
+    <update id="updateById" parameterType="com.example.snake_back.pojo.entity.RefreshToken">
+        UPDATE refresh_tokens
+        SET
+            user_id = #{userId},
+            token_hash = #{tokenHash},
+            issued_at = #{issuedAt},
+            expires_at = #{expiresAt},
+            revoked = #{revoked},
+            revoked_at = #{revokedAt},
+            replaced_by = #{replacedBy},
+            device_info = #{deviceInfo},
+            ip = #{ip},
+            last_used_at = #{lastUsedAt},
+            created_at = #{createdAt},
+            updated_at = #{updatedAt}
+        WHERE id = #{id}
+    </update>
+
+    <!-- 批量撤销该用户的所有未撤销 token -->
+    <update id="revokeAllByUserId" parameterType="map">
+        UPDATE refresh_tokens
+        SET revoked = TRUE,
+            revoked_at = #{revokedAt},
+            updated_at = #{revokedAt}
+        WHERE user_id = #{userId}
+          AND revoked = FALSE
+    </update>
+
+    <!-- 可选：按 user_id 查找最近一条未撤销的 token（便于调试或策略实现） -->
+    <select id="selectLatestActiveByUserId" resultMap="RefreshTokenResultMap" parameterType="string">
+        SELECT id, user_id, token_hash, issued_at, expires_at, revoked, revoked_at,
+               replaced_by, device_info, ip, last_used_at, created_at, updated_at
+        FROM refresh_tokens
+        WHERE user_id = #{userId} AND revoked = FALSE
+        ORDER BY issued_at DESC
+            LIMIT 1
+    </select>
+
+</mapper>
