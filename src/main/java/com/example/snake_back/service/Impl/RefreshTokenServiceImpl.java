@@ -1,5 +1,6 @@
 package com.example.snake_back.service.Impl;
 
+import com.example.snake_back.common.utils.JwtUtil;
 import com.example.snake_back.common.utils.TokenUtil;
 import com.example.snake_back.mapper.RefreshTokenMapper;
 import com.example.snake_back.pojo.entity.RefreshToken;
@@ -9,6 +10,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * RefreshTokenServiceImpl - 增加 validateAndRotate 与 revoke 功能
@@ -17,14 +20,15 @@ import java.time.format.DateTimeFormatter;
 public class RefreshTokenServiceImpl implements RefreshTokenService {
 
     private static final DateTimeFormatter DB_DT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
-
+    private final JwtUtil jwtUtil;
     private final RefreshTokenMapper refreshTokenMapper;
 
     // refresh 有效期示例：30 天
     private final long refreshDays = 30;
 
-    public RefreshTokenServiceImpl(RefreshTokenMapper refreshTokenMapper) {
+    public RefreshTokenServiceImpl(RefreshTokenMapper refreshTokenMapper, JwtUtil jwtUtil) {
         this.refreshTokenMapper = refreshTokenMapper;
+        this.jwtUtil = jwtUtil;
     }
 
     /**
@@ -77,7 +81,7 @@ public class RefreshTokenServiceImpl implements RefreshTokenService {
      */
     @Override
     @Transactional
-    public String validateAndRotate(String oldPlain, String ip, String deviceInfo) {
+    public Map<String,Object> validateAndRotate(String oldPlain, String ip, String deviceInfo) {
         if (oldPlain == null || oldPlain.isBlank()) return null;
 
         String oldHash = TokenUtil.sha256Hex(oldPlain);
@@ -88,20 +92,18 @@ public class RefreshTokenServiceImpl implements RefreshTokenService {
 
         String now = nowStr();
 
-        // 1) 先生成新 token/newId
+        // 1) 先生成新 token
+        Map<String,Object> claims = new HashMap<>();
         String newId = TokenUtil.newUuid();
         String newPlain = TokenUtil.generateTokenPlain(32);
         String newHash = TokenUtil.sha256Hex(newPlain);
+        claims.put("UserId", oldRec.getUserId());
+        String token = jwtUtil.generateToken(claims);
+        Map<String,Object> result = new HashMap<>();
+        result.put("accessToken", token);
+        result.put("refreshToken", newPlain);
 
-        // 2) 旧 token 失效，并指向新 token
-        oldRec.setRevoked(true);
-        oldRec.setRevokedAt(now);
-        oldRec.setLastUsedAt(now);
-        oldRec.setReplacedBy(newId);
-        oldRec.setUpdatedAt(now);
-        refreshTokenMapper.updateById(oldRec);
-
-        // 3) 插入新 token（不设置 replacedBy，避免语义混乱）
+        // 2) 先插入新 token（保证 FK 目标先存在）
         RefreshToken newRec = new RefreshToken();
         newRec.setId(newId);
         newRec.setUserId(oldRec.getUserId());
@@ -113,11 +115,18 @@ public class RefreshTokenServiceImpl implements RefreshTokenService {
         newRec.setIp(ip);
         newRec.setCreatedAt(now);
         newRec.setUpdatedAt(now);
-        newRec.setReplacedBy(null);
-
+        newRec.setReplacedBy(null); // 新 token 不应指向别人
         refreshTokenMapper.insert(newRec);
 
-        return newPlain;
+        // 3) 再更新旧 token -> 指向新 token
+        oldRec.setRevoked(true);
+        oldRec.setRevokedAt(now);
+        oldRec.setLastUsedAt(now);
+        oldRec.setReplacedBy(newId);
+        oldRec.setUpdatedAt(now);
+        refreshTokenMapper.updateById(oldRec);
+
+        return result;
     }
 
     /**

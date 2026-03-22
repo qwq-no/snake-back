@@ -48,35 +48,6 @@
             LIMIT 1
     </select>
 
-    <!-- 插入新记录（使用你生成的 id，而非数据库自增） -->
-    <insert id="insert" parameterType="com.example.snake_back.pojo.entity.RefreshToken">
-        INSERT INTO refresh_tokens
-        (id, user_id, token_hash, issued_at, expires_at, revoked, revoked_at,
-         replaced_by, device_info, ip, last_used_at, created_at, updated_at)
-        VALUES
-            (#{id}, #{userId}, #{tokenHash}, #{issuedAt}, #{expiresAt}, #{revoked}, #{revokedAt},
-             #{replacedBy}, #{deviceInfo}, #{ip}, #{lastUsedAt}, #{createdAt}, #{updatedAt})
-    </insert>
-
-    <!-- 根据 id 更新记录（updateById） -->
-    <update id="updateById" parameterType="com.example.snake_back.pojo.entity.RefreshToken">
-        UPDATE refresh_tokens
-        SET
-            user_id = #{userId},
-            token_hash = #{tokenHash},
-            issued_at = #{issuedAt},
-            expires_at = #{expiresAt},
-            revoked = #{revoked},
-            revoked_at = #{revokedAt},
-            replaced_by = #{replacedBy},
-            device_info = #{deviceInfo},
-            ip = #{ip},
-            last_used_at = #{lastUsedAt},
-            created_at = #{createdAt},
-            updated_at = #{updatedAt}
-        WHERE id = #{id}
-    </update>
-
     <!-- 批量撤销该用户的所有未撤销 token -->
     <update id="revokeAllByUserId" parameterType="map">
         UPDATE refresh_tokens

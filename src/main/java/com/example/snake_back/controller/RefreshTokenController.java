@@ -11,6 +11,9 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.util.WebUtils;
 
+import java.util.HashMap;
+import java.util.Map;
+
 /**
  * 简单示例 Controller：登录后设置 HttpOnly refresh cookie
  * （示例只演示 refresh cookie 的设置，登录验证密码逻辑省略）
@@ -34,12 +37,14 @@ public class RefreshTokenController {
         String oldPlain = cookie.getValue();
 
         // 验证并旋转：假设 refreshTokenService.validateAndRotate(oldPlain, ip, device) 返回 newPlain 或 null
-        String newPlain = refreshTokenService.validateAndRotate(oldPlain, request.getRemoteAddr(), "web");
-        if (newPlain == null) {
+        Map<String,Object> loginData = refreshTokenService.validateAndRotate(oldPlain, request.getRemoteAddr(), "web");
+        if (loginData == null) {
             // 无效或被撤销
             return ResponseEntity.ok().body(Result.error("401,cookie无效"));
         }
-
+        String newPlain = loginData.get("refreshToken").toString();
+        Map<String,Object> access = new HashMap<>();
+        access.put("accessToken", loginData.get("accessToken"));
         // 写入新的 refresh cookie（覆盖旧的）
         ResponseCookie newCookie = ResponseCookie.from("refresh_token", newPlain)
                 .httpOnly(true)
@@ -50,7 +55,7 @@ public class RefreshTokenController {
                 .build();
         response.addHeader(HttpHeaders.SET_COOKIE, newCookie.toString());
 
-        return ResponseEntity.ok().body(Result.success());
+        return ResponseEntity.ok().body(Result.success(access));
     }
 
     @PostMapping("/logout")
