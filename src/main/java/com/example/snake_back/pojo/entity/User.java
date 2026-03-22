@@ -1,7 +1,9 @@
 package com.example.snake_back.pojo.entity;
 
+import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
 
+@TableName("users")
 @Data
 public class User {
     private String id;            // UUID string

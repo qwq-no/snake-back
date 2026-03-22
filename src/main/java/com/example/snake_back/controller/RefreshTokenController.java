@@ -43,7 +43,7 @@ public class RefreshTokenController {
         // 写入新的 refresh cookie（覆盖旧的）
         ResponseCookie newCookie = ResponseCookie.from("refresh_token", newPlain)
                 .httpOnly(true)
-                .secure(true)
+                .secure(false)
                 .path("/")
                 .maxAge(30L * 24 * 3600)
                 .sameSite("Lax")
@@ -61,7 +61,7 @@ public class RefreshTokenController {
         }
         // 清除 cookie（与设置 cookie 时保持相同 path/domain）
         ResponseCookie expired = ResponseCookie.from("refresh_token", "")
-                .httpOnly(true).secure(true).path("/").maxAge(0).sameSite("Lax").build();
+                .httpOnly(true).secure(false).path("/").maxAge(0).sameSite("Lax").build();
         response.addHeader(HttpHeaders.SET_COOKIE, expired.toString());
         return ResponseEntity.ok().body(Result.success());
     }

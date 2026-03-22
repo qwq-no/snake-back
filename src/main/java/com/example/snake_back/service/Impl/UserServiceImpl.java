@@ -1,6 +1,7 @@
 package com.example.snake_back.service.Impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.example.snake_back.common.utils.JwtUtil;
 import com.example.snake_back.pojo.dto.UserRegisterDto;
 import com.example.snake_back.mapper.UserMapper;
 import com.example.snake_back.pojo.entity.User;
@@ -11,40 +12,56 @@ import com.example.snake_back.pojo.dto.UserLoginDto;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * 最小注册实现：检查用户名唯一 -> 写入 users 表
  */
 @Service
 public class UserServiceImpl implements UserService {
-
+    private static final DateTimeFormatter DB_DT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private final UserMapper userMapper;
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
     private final RefreshTokenService refreshTokenService;
-
-    public UserServiceImpl(UserMapper userMapper,RefreshTokenService refreshTokenService) {
+    private final JwtUtil jwtUtil;
+    public UserServiceImpl(UserMapper userMapper,RefreshTokenService refreshTokenService,JwtUtil jwtUtil) {
         this.userMapper = userMapper;
         this.refreshTokenService = refreshTokenService;
+        this.jwtUtil = jwtUtil;
     }
 
     @Override
     @Transactional
-    public String login(UserLoginDto dto,String deviceInfo,String ip){
+    public Map<String,Object> login(UserLoginDto dto, String deviceInfo, String ip){
+        Map<String,Object> claims = new HashMap<>();
         User exist = userMapper.selectOne(new QueryWrapper<User>().eq("username", dto.getUsername()));
         if (exist == null) {
             throw new IllegalArgumentException("invalid username or password");
         }
-        String passwordEncrypted = passwordEncoder.encode(dto.getPassword());
-        if(passwordEncrypted == null || !passwordEncrypted.equals(dto.getPassword())){
-            throw new IllegalArgumentException("invalid password");
+
+        if (dto.getPassword() == null || exist.getPasswordHash() == null
+                || !passwordEncoder.matches(dto.getPassword(), exist.getPasswordHash())) {
+            throw new IllegalArgumentException("invalid username or password");
         }
-        String tokenPlain = refreshTokenService.createAndSaveRefreshToken(exist.getId(),deviceInfo,ip);
-        String now = Instant.now().toString();
+
+        String tokenPlain = refreshTokenService.createAndSaveRefreshToken(exist.getId(), deviceInfo, ip);
+        String now = LocalDateTime.now().format(DB_DT);
         exist.setLastLoginAt(now);
         exist.setUpdatedAt(now);
         userMapper.updateById(exist);
-        return tokenPlain;
+
+        claims.put("UserId", exist.getId());
+        String token = jwtUtil.generateToken(claims);
+        Map<String,Object> result = new HashMap<>();
+        result.put("accessToken", token);
+        result.put("refreshToken", tokenPlain);
+        result.put("id", exist.getId());
+        result.put("username", exist.getUsername());
+        result.put("displayName",exist.getDisplayName());
+        return result;
     }
 
     @Override
@@ -56,8 +73,7 @@ public class UserServiceImpl implements UserService {
             throw new IllegalArgumentException("username already exists");
         }
 
-        String now = Instant.now().toString();
-
+        String now = LocalDateTime.now().format(DB_DT);
         User user = new User();
         user.setId(TokenUtil.newUuid());
         user.setUsername(dto.getUsername());

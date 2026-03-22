@@ -1,7 +1,9 @@
 package com.example.snake_back.pojo.entity;
 
+import com.baomidou.mybatisplus.annotation.TableName;
 import lombok.Data;
 
+@TableName("refresh_tokens")
 @Data
 public class RefreshToken {
     private String id;            // UUID string for the session row

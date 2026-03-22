@@ -18,10 +18,15 @@ public class SecurityConfig {
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http, RestAuthenticationEntryPoint entryPoint) throws Exception {
         http
-                // 避免方法重载歧义：用 lambda/Customizer 样式
                 .csrf(csrf -> csrf.disable())
+                .cors(cors -> {})
                 .authorizeHttpRequests(authorize -> authorize
-                        .requestMatchers("/api/user/login", "/api/user/register", "/api/auth/refresh").permitAll()
+                        .requestMatchers(
+                                "/api/user/login",
+                                "/api/user/register",
+                                "/api/refresh/**",
+                                "/error"
+                        ).permitAll()
                         .anyRequest().authenticated()
                 )
                 .httpBasic(httpBasic -> httpBasic.disable())
