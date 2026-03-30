@@ -8,5 +8,6 @@ import java.util.Map;
 public interface UserService {
     Map<String,Object> login(UserLoginDto dto, String deviceInfo, String ip);
     void register(UserRegisterDto dto);
+    public int compareMaxLength(int length,String userId);
 }
 

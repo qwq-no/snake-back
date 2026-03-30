@@ -1,5 +1,6 @@
 package com.example.snake_back.mapper;
 
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.example.snake_back.pojo.entity.User;
 import org.apache.ibatis.annotations.Mapper;

@@ -18,4 +18,6 @@ public class User {
     private String lastLoginAt;
     private String createdAt;
     private String updatedAt;
+    private Integer userCode;
+    private Integer maxLength;
 }

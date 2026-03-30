@@ -3,7 +3,9 @@ package com.example.snake_back.service.Impl;
 import com.example.snake_back.common.utils.JwtUtil;
 import com.example.snake_back.common.utils.TokenUtil;
 import com.example.snake_back.mapper.RefreshTokenMapper;
+import com.example.snake_back.mapper.UserMapper;
 import com.example.snake_back.pojo.entity.RefreshToken;
+import com.example.snake_back.pojo.entity.User;
 import com.example.snake_back.service.RefreshTokenService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -22,13 +24,15 @@ public class RefreshTokenServiceImpl implements RefreshTokenService {
     private static final DateTimeFormatter DB_DT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private final JwtUtil jwtUtil;
     private final RefreshTokenMapper refreshTokenMapper;
+    private final UserMapper userMapper;
 
     // refresh 有效期示例：30 天
     private final long refreshDays = 30;
 
-    public RefreshTokenServiceImpl(RefreshTokenMapper refreshTokenMapper, JwtUtil jwtUtil) {
+    public RefreshTokenServiceImpl(RefreshTokenMapper refreshTokenMapper, JwtUtil jwtUtil, UserMapper userMapper) {
         this.refreshTokenMapper = refreshTokenMapper;
         this.jwtUtil = jwtUtil;
+        this.userMapper = userMapper;
     }
 
     /**
@@ -92,18 +96,26 @@ public class RefreshTokenServiceImpl implements RefreshTokenService {
 
         String now = nowStr();
 
-        // 1) 先生成新 token
+        // 1) 生成新 token
         Map<String,Object> claims = new HashMap<>();
         String newId = TokenUtil.newUuid();
         String newPlain = TokenUtil.generateTokenPlain(32);
         String newHash = TokenUtil.sha256Hex(newPlain);
         claims.put("UserId", oldRec.getUserId());
         String token = jwtUtil.generateToken(claims);
+
         Map<String,Object> result = new HashMap<>();
+        Map<String,Object> user = new HashMap<>();
+        String userId = oldRec.getUserId();
+        User exist = userMapper.selectById(userId);
         result.put("accessToken", token);
         result.put("refreshToken", newPlain);
+        user.put("userCode", String.format("%06d",exist.getUserCode()));
+        user.put("username", exist.getUsername());
+        user.put("displayName", exist.getDisplayName());
+        result.put("user", user);
 
-        // 2) 先插入新 token（保证 FK 目标先存在）
+        // 2) 插入新 refresh
         RefreshToken newRec = new RefreshToken();
         newRec.setId(newId);
         newRec.setUserId(oldRec.getUserId());
@@ -115,10 +127,10 @@ public class RefreshTokenServiceImpl implements RefreshTokenService {
         newRec.setIp(ip);
         newRec.setCreatedAt(now);
         newRec.setUpdatedAt(now);
-        newRec.setReplacedBy(null); // 新 token 不应指向别人
+        newRec.setReplacedBy(null);
         refreshTokenMapper.insert(newRec);
 
-        // 3) 再更新旧 token -> 指向新 token
+        // 3) 更新旧 refresh
         oldRec.setRevoked(true);
         oldRec.setRevokedAt(now);
         oldRec.setLastUsedAt(now);
@@ -140,7 +152,7 @@ public class RefreshTokenServiceImpl implements RefreshTokenService {
         String tokenHash = TokenUtil.sha256Hex(tokenPlain);
         RefreshToken rec = refreshTokenMapper.selectByTokenHash(tokenHash);
         if (rec == null) return false;
-        if (Boolean.TRUE.equals(rec.getRevoked())) return false;
+        if (Boolean.TRUE.equals(rec.getRevoked())) return false;    //避免rec的revoked为空报错
 
         String now = nowStr();
         rec.setRevoked(true);

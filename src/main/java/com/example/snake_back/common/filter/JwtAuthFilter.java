@@ -10,6 +10,9 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.authority.AuthorityUtils;
 import org.springframework.stereotype.Component;
 import org.springframework.util.AntPathMatcher;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -33,13 +36,13 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             "/api/user/login",
             "/api/user/register",
             "/api/refresh/login",
+            "/api/refresh/logout",
             "/error"
     );
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getRequestURI();
-        // OPTIONS 预检请求放行
         if ("OPTIONS".equalsIgnoreCase(request.getMethod())) return true;
         return WHITE_LIST.stream().anyMatch(p -> pathMatcher.match(p, path));
     }
@@ -64,17 +67,23 @@ public class JwtAuthFilter extends OncePerRequestFilter {
         try {
             Claims claims = jwtUtil.parseToken(token);
 
-            // 你当前token里放的是 "UserId"
+            // 你当前 token 里放的是 "UserId"
             String userId = claims.get("UserId", String.class);
-            if (userId == null ||userId.isBlank()) {
+            request.setAttribute("userId", userId);
+            if (userId == null || userId.isBlank()) {
                 write401(response, "UserId missing in token");
                 return;
             }
 
-            // 放到请求上下文，Controller里可直接取
-            request.setAttribute("currentUserId", userId);
-            // 如有需要也可放 username
-            // request.setAttribute("currentUsername", claims.get("username", String.class));
+            // 关键：告诉 Spring Security 当前请求已认证
+            UsernamePasswordAuthenticationToken authentication =
+                    new UsernamePasswordAuthenticationToken(
+                            userId,
+                            null,
+                            AuthorityUtils.NO_AUTHORITIES
+                    );
+            SecurityContextHolder.getContext().setAuthentication(authentication);
+
 
             filterChain.doFilter(request, response);
 

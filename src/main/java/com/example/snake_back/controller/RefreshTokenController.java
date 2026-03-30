@@ -21,7 +21,6 @@ import java.util.Map;
 @RestController
 @RequestMapping("/api/refresh")
 public class RefreshTokenController {
-
     private final RefreshTokenService refreshTokenService;
 
     public RefreshTokenController(RefreshTokenService refreshTokenService) {
@@ -36,16 +35,14 @@ public class RefreshTokenController {
         }
         String oldPlain = cookie.getValue();
 
-        // 验证并旋转：假设 refreshTokenService.validateAndRotate(oldPlain, ip, device) 返回 newPlain 或 null
         Map<String,Object> loginData = refreshTokenService.validateAndRotate(oldPlain, request.getRemoteAddr(), "web");
         if (loginData == null) {
-            // 无效或被撤销
             return ResponseEntity.ok().body(Result.error("401,cookie无效"));
         }
+
         String newPlain = loginData.get("refreshToken").toString();
-        Map<String,Object> access = new HashMap<>();
-        access.put("accessToken", loginData.get("accessToken"));
-        // 写入新的 refresh cookie（覆盖旧的）
+
+        // 写入新的 refresh cookie
         ResponseCookie newCookie = ResponseCookie.from("refresh_token", newPlain)
                 .httpOnly(true)
                 .secure(false)
@@ -55,7 +52,11 @@ public class RefreshTokenController {
                 .build();
         response.addHeader(HttpHeaders.SET_COOKIE, newCookie.toString());
 
-        return ResponseEntity.ok().body(Result.success(access));
+        Map<String,Object> body = new HashMap<>();
+        body.put("accessToken", loginData.get("accessToken"));
+        body.put("user", loginData.get("user"));
+
+        return ResponseEntity.ok().body(Result.success(body));
     }
 
     @PostMapping("/logout")

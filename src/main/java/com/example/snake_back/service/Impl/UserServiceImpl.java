@@ -41,7 +41,6 @@ public class UserServiceImpl implements UserService {
         if (exist == null) {
             throw new IllegalArgumentException("invalid username or password");
         }
-
         if (dto.getPassword() == null || exist.getPasswordHash() == null
                 || !passwordEncoder.matches(dto.getPassword(), exist.getPasswordHash())) {
             throw new IllegalArgumentException("invalid username or password");
@@ -55,12 +54,17 @@ public class UserServiceImpl implements UserService {
 
         claims.put("UserId", exist.getId());
         String token = jwtUtil.generateToken(claims);
+
         Map<String,Object> result = new HashMap<>();
         result.put("accessToken", token);
         result.put("refreshToken", tokenPlain);
-        result.put("id", exist.getId());
-        result.put("username", exist.getUsername());
-        result.put("displayName",exist.getDisplayName());
+
+        Map<String,Object> user = new HashMap<>();
+        user.put("userCode", String.format("%06d", exist.getUserCode()));
+        user.put("username", exist.getUsername());
+        user.put("displayName", exist.getDisplayName());
+
+        result.put("user", user);
         return result;
     }
 
@@ -72,7 +76,6 @@ public class UserServiceImpl implements UserService {
         if (exist != null) {
             throw new IllegalArgumentException("username already exists");
         }
-
         String now = LocalDateTime.now().format(DB_DT);
         User user = new User();
         user.setId(TokenUtil.newUuid());
@@ -86,5 +89,21 @@ public class UserServiceImpl implements UserService {
         user.setUpdatedAt(now);
 
         userMapper.insert(user);
+    }
+
+    @Override
+    @Transactional
+    public int compareMaxLength(int length,String userId) {
+        User user = userMapper.selectOne(new QueryWrapper<User>().eq("id", userId));
+        if (user == null) {throw new IllegalArgumentException("invalid user id");}
+        int maxLength = user.getMaxLength();
+        if (maxLength < length) {
+            user.setMaxLength(length);
+            userMapper.updateById(user);
+            return length;
+        }
+        else {
+            return maxLength;
+        }
     }
 }
