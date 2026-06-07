@@ -7,6 +7,6 @@ import lombok.NoArgsConstructor;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
-public class UserMaxLengthDto {
+public class UserMaxLengthDTO {
     Integer length;
 }

@@ -10,7 +10,7 @@ import lombok.NoArgsConstructor;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
-public class UserRegisterDto {
+public class UserRegisterDTO {
     private String id;          // 可选：通常由后端生成
     private String username;
     private String email;

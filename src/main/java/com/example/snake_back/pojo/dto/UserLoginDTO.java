@@ -10,7 +10,7 @@ import lombok.NoArgsConstructor;
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
-public class UserLoginDto {
+public class UserLoginDTO {
     private String username;
     private String password;    // 明文密码，由后端哈希后存入 passwordHash
 }

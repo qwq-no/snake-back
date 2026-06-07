@@ -2,13 +2,15 @@ package com.example.snake_back.service.Impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.example.snake_back.common.utils.JwtUtil;
-import com.example.snake_back.pojo.dto.UserRegisterDto;
+import com.example.snake_back.manager.SessionContextManager;
+import com.example.snake_back.pojo.dto.SessionContextDTO;
+import com.example.snake_back.pojo.dto.UserRegisterDTO;
 import com.example.snake_back.mapper.UserMapper;
 import com.example.snake_back.pojo.entity.User;
 import com.example.snake_back.service.RefreshTokenService;
 import com.example.snake_back.service.UserService;
 import com.example.snake_back.common.utils.TokenUtil;
-import com.example.snake_back.pojo.dto.UserLoginDto;
+import com.example.snake_back.pojo.dto.UserLoginDTO;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -27,15 +29,18 @@ public class UserServiceImpl implements UserService {
     private final BCryptPasswordEncoder passwordEncoder = new BCryptPasswordEncoder();
     private final RefreshTokenService refreshTokenService;
     private final JwtUtil jwtUtil;
-    public UserServiceImpl(UserMapper userMapper,RefreshTokenService refreshTokenService,JwtUtil jwtUtil) {
+    private final SessionContextManager sessionContextManager;
+    public UserServiceImpl(UserMapper userMapper, RefreshTokenService refreshTokenService, JwtUtil jwtUtil,
+                           SessionContextManager sessionContextManager) {
         this.userMapper = userMapper;
         this.refreshTokenService = refreshTokenService;
         this.jwtUtil = jwtUtil;
+        this.sessionContextManager = sessionContextManager;
     }
 
     @Override
     @Transactional
-    public Map<String,Object> login(UserLoginDto dto, String deviceInfo, String ip){
+    public Map<String,Object> login(UserLoginDTO dto, String deviceInfo, String ip){
         Map<String,Object> claims = new HashMap<>();
         User exist = userMapper.selectOne(new QueryWrapper<User>().eq("username", dto.getUsername()));
         if (exist == null) {
@@ -70,7 +75,7 @@ public class UserServiceImpl implements UserService {
 
     @Override
     @Transactional
-    public void register(UserRegisterDto dto) {
+    public void register(UserRegisterDTO dto) {
         // 简单唯一性检查（可扩展为更严格的并发检查）
         User exist = userMapper.selectOne(new QueryWrapper<User>().eq("username", dto.getUsername()));
         if (exist != null) {
@@ -105,5 +110,47 @@ public class UserServiceImpl implements UserService {
         else {
             return maxLength;
         }
+    }
+
+    @Override
+    @Transactional
+    public void updateDisplayName(String userId, String displayName) {
+        if (displayName == null || displayName.isBlank()) {
+            throw new IllegalArgumentException("display name cannot be empty");
+        }
+        User user = userMapper.selectOne(new QueryWrapper<User>().eq("id", userId));
+        if (user == null) {
+            throw new IllegalArgumentException("invalid user id");
+        }
+        String trimmed = displayName.trim();
+        user.setDisplayName(trimmed);
+        user.setUpdatedAt(LocalDateTime.now().format(DB_DT));
+        userMapper.updateById(user);
+
+        // 同步更新内存中的 SessionContext，否则好友列表不会立即反映新名称
+        String userCodeStr = String.format("%06d", user.getUserCode());
+        String sessionId = sessionContextManager.getUserCodeToSessionIdMap().get(userCodeStr);
+        if (sessionId != null) {
+            SessionContextDTO ctx = sessionContextManager.getSessionContextMap().get(sessionId);
+            if (ctx != null) {
+                ctx.setNickname(trimmed);
+            }
+        }
+    }
+
+    @Override
+    @Transactional
+    public void updatePassword(String userId, String newPassword) {
+        if (newPassword == null || newPassword.isBlank()) {
+            throw new IllegalArgumentException("password cannot be empty");
+        }
+        User user = userMapper.selectOne(new QueryWrapper<User>().eq("id", userId));
+        if (user == null) {
+            throw new IllegalArgumentException("invalid user id");
+        }
+        user.setPasswordHash(passwordEncoder.encode(newPassword));
+        user.setPasswordChangedAt(LocalDateTime.now().format(DB_DT));
+        user.setUpdatedAt(LocalDateTime.now().format(DB_DT));
+        userMapper.updateById(user);
     }
 }

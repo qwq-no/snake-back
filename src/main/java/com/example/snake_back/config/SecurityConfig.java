@@ -12,9 +12,6 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 @Configuration
 public class SecurityConfig {
 
-    public SecurityConfig() {
-        System.out.println(">>> SecurityConfig loaded");
-    }
     @Bean
     public RestAuthenticationEntryPoint restAuthenticationEntryPoint() {
         return new RestAuthenticationEntryPoint();
@@ -36,6 +33,7 @@ public class SecurityConfig {
                                 "/api/user/register",
                                 "/api/refresh/login",
                                 "/api/refresh/logout",
+                                "/ws/**",
                                 "/error"
                         ).permitAll()
                         .anyRequest().authenticated()

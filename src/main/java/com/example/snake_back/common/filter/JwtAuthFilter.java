@@ -37,12 +37,16 @@ public class JwtAuthFilter extends OncePerRequestFilter {
             "/api/user/register",
             "/api/refresh/login",
             "/api/refresh/logout",
+            "/ws/**",
             "/error"
     );
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         String path = request.getRequestURI();
+        if (path.startsWith("/ws/")) {
+            return true;
+        }
         if ("OPTIONS".equalsIgnoreCase(request.getMethod())) return true;
         return WHITE_LIST.stream().anyMatch(p -> pathMatcher.match(p, path));
     }

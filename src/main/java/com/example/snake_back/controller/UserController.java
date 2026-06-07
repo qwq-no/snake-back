@@ -1,9 +1,9 @@
 package com.example.snake_back.controller;
 
 import com.example.snake_back.common.result.Result;
-import com.example.snake_back.pojo.dto.UserLoginDto;
-import com.example.snake_back.pojo.dto.UserMaxLengthDto;
-import com.example.snake_back.pojo.dto.UserRegisterDto;
+import com.example.snake_back.pojo.dto.UserLoginDTO;
+import com.example.snake_back.pojo.dto.UserMaxLengthDTO;
+import com.example.snake_back.pojo.dto.UserRegisterDTO;
 import com.example.snake_back.service.UserService;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpHeaders;
@@ -26,17 +26,17 @@ public class UserController {
         this.userService = userService;
     }
 
-//    @GetMapping("/getId")
-//    public Result<String> getId(HttpServletRequest request) {
-//        Object uid = request.getAttribute("currentUserId");
-//        if (uid == null) {
-//            return Result.error("unauthorized");
-//        }
-//        return Result.success(uid.toString());
-//    }
+    @GetMapping("/getId")
+    public Result<String> getId(HttpServletRequest request) {
+        Object uid = request.getAttribute("currentUserId");
+        if (uid == null) {
+            return Result.error("unauthorized");
+        }
+        return Result.success(uid.toString());
+    }
 
     @PostMapping("/login")
-    public ResponseEntity<?> login(@RequestBody UserLoginDto userLoginDto) {
+    public ResponseEntity<?> login(@RequestBody UserLoginDTO userLoginDto) {
         try {
             Map<String, Object> loginData = userService.login(userLoginDto, "web", "127.0.0.1");
             String refreshToken = loginData.get("refreshToken").toString();
@@ -62,7 +62,7 @@ public class UserController {
     }
 
     @PostMapping("/register")
-    public Result<String> register(@RequestBody UserRegisterDto dto) {
+    public Result<String> register(@RequestBody UserRegisterDTO dto) {
         try {
             userService.register(dto);
             return Result.success();
@@ -72,7 +72,7 @@ public class UserController {
     }
 
     @PostMapping("/getMaxLength")
-    public Result<Map<String,Object>> getMaxLength(@RequestBody UserMaxLengthDto dto, HttpServletRequest request) {
+    public Result<Map<String,Object>> getMaxLength(@RequestBody UserMaxLengthDTO dto, HttpServletRequest request) {
         try {
             int length = dto.getLength();
             String userId = request.getAttribute("userId").toString();
@@ -81,6 +81,28 @@ public class UserController {
             body.put("maxLength", maxLength);
             return Result.success(body);
         }catch (Exception e){
+            return Result.error(e.getMessage());
+        }
+    }
+
+    @PostMapping("/updateDisplayName")
+    public Result<?> updateDisplayName(@RequestBody Map<String, String> body, HttpServletRequest request) {
+        try {
+            String userId = request.getAttribute("userId").toString();
+            userService.updateDisplayName(userId, body.get("displayName"));
+            return Result.success();
+        } catch (Exception e) {
+            return Result.error(e.getMessage());
+        }
+    }
+
+    @PostMapping("/updatePassword")
+    public Result<?> updatePassword(@RequestBody Map<String, String> body, HttpServletRequest request) {
+        try {
+            String userId = request.getAttribute("userId").toString();
+            userService.updatePassword(userId, body.get("password"));
+            return Result.success();
+        } catch (Exception e) {
             return Result.error(e.getMessage());
         }
     }

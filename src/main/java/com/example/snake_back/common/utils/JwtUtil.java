@@ -43,13 +43,11 @@ public class JwtUtil {
      * 解析JWT（新版API写法，解决 parser() 弃用）
      */
     public static Claims parseJWT(String secretKey, String token) {
-        // 新版：用 parserBuilder() 替代 parser()
-        return Jwts.parserBuilder()
-                // 新版：用 setSigningKey 接收 Key 对象（替代旧的字节数组）
-                .setSigningKey(Keys.hmacShaKeyFor(secretKey.getBytes(StandardCharsets.UTF_8)))
-                .build() // 构建解析器
-                .parseClaimsJws(token) // 解析Token
-                .getBody(); // 获取载荷
+        return Jwts.parser()
+            .verifyWith(Keys.hmacShaKeyFor(secretKey.getBytes(StandardCharsets.UTF_8)))
+            .build()
+            .parseSignedClaims(token)
+            .getPayload();
     }
 
     /**
