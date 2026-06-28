@@ -15,7 +15,6 @@ public class RoomStateManager {
     private final Map<Integer, Set<String>> roomReadyUsers = new ConcurrentHashMap<>(); //每个房间准备情况
     private final Map<Integer, Set<String>> roomMembers = new ConcurrentHashMap<>();    //每个房间都有谁
     private final Map<String, Integer> userRoom = new ConcurrentHashMap<>();            //每个人都在哪个房间
-    private final Map<String, Long> userHeartbeat = new ConcurrentHashMap<>();          //每个人上一次的响应时间
     private final Map<String,String> codeName = new ConcurrentHashMap<>();              //每个人的id对应的昵称
 
     public RoomState getOrInitRoom(int roomCode) {
@@ -48,7 +47,6 @@ public class RoomStateManager {
     public void addUserToRoom(int roomCode, String userCode) {
         roomMembers.computeIfAbsent(roomCode, k -> ConcurrentHashMap.newKeySet()).add(userCode);
         userRoom.put(userCode, roomCode);
-        userHeartbeat.put(userCode, System.currentTimeMillis());
     }
 
     public void removeUserFromRoom(String userCode) {
@@ -57,7 +55,6 @@ public class RoomStateManager {
             roomMembers.getOrDefault(roomCode, Set.of()).remove(userCode);
             roomReadyUsers.getOrDefault(roomCode, Set.of()).remove(userCode);
         }
-        userHeartbeat.remove(userCode);
     }
 
     public void ready(String userCode) {

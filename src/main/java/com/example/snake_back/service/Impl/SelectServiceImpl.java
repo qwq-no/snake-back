@@ -1,7 +1,6 @@
 package com.example.snake_back.service.Impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
-import com.example.snake_back.common.utils.PageUtil;
 import com.example.snake_back.manager.RoomStateManager;
 import com.example.snake_back.manager.RoomSummaryManager;
 import com.example.snake_back.mapper.UserMapper;
@@ -21,19 +20,14 @@ public class SelectServiceImpl implements SelectService {
     private final UserMapper userMapper;
     private final BroadcastService broadcastService;
     private final OnlineService onlineService;
-    private final FriendshipServiceImpl friendshipService;
-    private final PageUtil pageUtil;
 
     public SelectServiceImpl(RoomSummaryManager roomSummaryManager,RoomStateManager roomStateManager, UserMapper userMapper,
-                             BroadcastService broadcastService,OnlineService onlineService,FriendshipServiceImpl friendshipService,
-                             PageUtil pageUtil) {
+                             BroadcastService broadcastService,OnlineService onlineService) {
         this.roomSummaryManager = roomSummaryManager;
         this.roomStateManager = roomStateManager;
         this.userMapper = userMapper;
         this.broadcastService = broadcastService;
         this.onlineService = onlineService;
-        this.friendshipService = friendshipService;
-        this.pageUtil = pageUtil;
     }
     @Override
     public void joinRoom(int roomCode,String userCode) {

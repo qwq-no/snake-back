@@ -1,6 +1,5 @@
 package com.example.snake_back.service.Impl;
 
-import com.example.snake_back.common.utils.PageUtil;
 import com.example.snake_back.common.utils.RoomUtil;
 import com.example.snake_back.manager.RoomStateManager;
 import com.example.snake_back.manager.RoomSummaryManager;
@@ -35,7 +34,6 @@ public class OnlineServiceImpl implements OnlineService {
     private final RoomStateManager roomStateManager;
     private final BroadcastService broadcastService;
     private final RoomSummaryManager roomSummaryManager;
-    private final PageUtil  pageUtil;
     private final RoomUtil  roomUtil;
     private final SessionContextManager sessionContextManager;
 
@@ -47,12 +45,11 @@ public class OnlineServiceImpl implements OnlineService {
     });
 
     public OnlineServiceImpl(RoomStateManager roomStateManager, BroadcastService broadcastService,RoomSummaryManager roomSummaryManager,
-                              PageUtil pageUtil, RoomUtil roomUtil, SessionContextManager sessionContextManager,
+                              RoomUtil roomUtil, SessionContextManager sessionContextManager,
                               UserMapper userMapper) {
         this.roomStateManager = roomStateManager;
         this.broadcastService = broadcastService;
         this.roomSummaryManager = roomSummaryManager;
-        this.pageUtil = pageUtil;
         this.roomUtil = roomUtil;
         this.sessionContextManager = sessionContextManager;
         this.userMapper = userMapper;
@@ -130,37 +127,6 @@ public class OnlineServiceImpl implements OnlineService {
                 q.addLast(newDirection);
             }
         }
-    }
-
-    private void enqueueDirection(SnakeState snake, String newDirection) {
-        if (snake.getDirectionQueue() == null) {
-            snake.setDirectionQueue(new java.util.ArrayDeque<>());
-        }
-        java.util.Deque<String> q = snake.getDirectionQueue();
-        String currentDir = snake.getDirection();
-        String effectiveDir = q.peekFirst() != null ? q.peekFirst() : currentDir;
-            // currentDir, q, newDirection, effectiveDir);
-        // 如果队列已有 3 个，新方向被丢弃
-        if (q.size() >= 3) {
-            return;
-        }
-        // 获取队列当前有效方向：队首方向（即将使用的），如果没有则取当前 direction
-        String effectiveDirection = q.peekFirst();
-        if (effectiveDirection == null) {
-            effectiveDirection = snake.getDirection();
-        }
-        // 检查是否与有效方向相反
-        if (isOpposite(effectiveDirection, newDirection)) {
-            return;
-        }
-        // 检查队列中最后一个方向是否与 newDirection 相同
-        String lastInQueue = q.peekLast();
-        if (lastInQueue != null && newDirection.equals(lastInQueue)) {
-            return;
-        }
-        q.addLast(newDirection);
-        // 队列最前端的方向立刻生效到 directionNext
-        snake.setDirectionNext(q.peekFirst());
     }
 
     private boolean isOpposite(String a, String b) {

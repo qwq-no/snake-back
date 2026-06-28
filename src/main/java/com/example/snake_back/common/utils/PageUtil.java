@@ -46,7 +46,6 @@ public class PageUtil {
             sessionContextDTO.setRoomCode(null);
         }
         sessionContextManager.fitStatus(sessionId);
-        sessionContextManager.logSessionContextMap(userCode + " " + fromPage + "→" + pageType);
 
         if (sendSnapshot) {
             pushSnapshot(userCode, pageType);

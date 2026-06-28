@@ -88,9 +88,6 @@ public class SessionContextManager {
         return status;
     }
 
-    public void logSessionContextMap(String reason) {
-    }
-
     private String deriveStatus(SessionContextDTO sessionContextDTO) {
         String pageType = normalize(sessionContextDTO.getPageType());
         if (!pageType.isEmpty()) {

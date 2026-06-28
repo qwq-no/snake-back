@@ -115,7 +115,6 @@ public class SessionContextServiceImpl implements SessionContextService {
 
         sessionContextManager.indexSession(userCode, pageType);
         sessionContextManager.fitStatus(session.getId());
-        sessionContextManager.logSessionContextMap("registerSession userCode=" + userCode + ", pageType=" + pageType);
         if ("home".equals(pageType)) {
             broadcastService.sendHomeFriendStatuses(userCode);
             // 注册到首页时自动推送群聊历史，避免前端刷新时 WS 尚未 OPEN 导致 requestGroupChatHistory 丢失

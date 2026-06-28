@@ -25,7 +25,6 @@ public class SnakeState {
     private int emojiTimer;               // 表情包倒计时
     private String type;                   // human / ai
     private String ownerUserCode;          // 真人蛇对应的用户
-    private String sessionId;              // 对应的 WebSocket sessionId
     private int maxLength;                 // 蛇的最大长度
     private String deathReason;            // 最近一次死亡原因
     private Deque<String> directionQueue;  // 方向输入队列，最多 3 个，防快速反向

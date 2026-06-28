@@ -42,19 +42,9 @@ public class BroadcastServiceImpl implements BroadcastService {
     private final AtomicLong onlineDeltaBroadcastCounter = new AtomicLong(0);
     private final AtomicLong onlineSnapshotBroadcastCounter = new AtomicLong(0);
     private final AtomicLong onlineDebugTimeBroadcastCounter = new AtomicLong(0);
-    private final AtomicLong onlineDeltaSendCounter = new AtomicLong(0);
-    private final AtomicLong onlineSnapshotSendCounter = new AtomicLong(0);
-    private final AtomicLong onlineDebugTimeSendCounter = new AtomicLong(0);
-    private final AtomicLong onlineDeltaSendEnterCounter = new AtomicLong(0);
-    private final AtomicLong onlineSnapshotSendEnterCounter = new AtomicLong(0);
-    private final AtomicLong onlineDebugTimeSendEnterCounter = new AtomicLong(0);
-    private final Map<String, Integer> sessionSendFailureStreak = new ConcurrentHashMap<>();
-    private final Map<String, Integer> sessionSlowSendStreak = new ConcurrentHashMap<>();
     private final Map<String, Long> sessionLastSendSuccessAt = new ConcurrentHashMap<>();
 
     private static final long WS_SLOW_SEND_WARN_MS = 120L;
-    private static final int WS_SEND_FAILURE_STREAK_THRESHOLD = 3;
-    private static final int WS_SLOW_SEND_STREAK_WARN_THRESHOLD = 5;
     private static final long WS_STALE_SEND_CLOSE_MS = 15000L;
 
     private final GroupChatManager groupChatManager;
@@ -284,9 +274,7 @@ public class BroadcastServiceImpl implements BroadcastService {
         response.setData(delta);
 
         String json = toJson(response);
-        long deltaSeq = onlineDeltaBroadcastCounter.incrementAndGet();
-        if (deltaSeq % 3 == 0) {
-        }
+        onlineDeltaBroadcastCounter.incrementAndGet();
 
         lastRoomSnapshots.put(roomCode, currentSnapshot);
 
@@ -321,9 +309,7 @@ public class BroadcastServiceImpl implements BroadcastService {
         response.setData(snapshot);
 
         String json = toJson(response);
-        long snapshotSeq = onlineSnapshotBroadcastCounter.incrementAndGet();
-        if (snapshotSeq % 3 == 0) {
-        }
+        onlineSnapshotBroadcastCounter.incrementAndGet();
 
         lastRoomSnapshots.put(roomCode, snapshot);
 
@@ -355,9 +341,7 @@ public class BroadcastServiceImpl implements BroadcastService {
         response.setData(timestamp);
 
         String json = toJson(response);
-        long debugSeq = onlineDebugTimeBroadcastCounter.incrementAndGet();
-        if (debugSeq % 3 == 0) {
-        }
+        onlineDebugTimeBroadcastCounter.incrementAndGet();
         for (String userCode : members) {
             String sessionId = sessionContextManager.getUserCodeToSessionIdMap().get(userCode);
             SessionContextDTO context = sessionId == null ? null : sessionContextManager.getSessionContextMap().get(sessionId);
@@ -409,49 +393,7 @@ public class BroadcastServiceImpl implements BroadcastService {
             }
         });
         sessionLastSendSuccessAt.remove(sessionId);
-        sessionSlowSendStreak.remove(sessionId);
-        sessionSendFailureStreak.remove(sessionId);
         return true;
-    }
-
-    private void logOnlineSendTag(String channel) {
-        if ("delta".equals(channel)) {
-            long seq = onlineDeltaSendCounter.incrementAndGet();
-            if (seq % 3 == 0) {
-            }
-            return;
-        }
-        if ("snapshot".equals(channel)) {
-            long seq = onlineSnapshotSendCounter.incrementAndGet();
-            if (seq % 3 == 0) {
-            }
-            return;
-        }
-        if ("debug_time".equals(channel)) {
-            long seq = onlineDebugTimeSendCounter.incrementAndGet();
-            if (seq % 3 == 0) {
-            }
-        }
-    }
-
-    private void logOnlineSendEnterTag(String channel) {
-        if ("delta".equals(channel)) {
-            long seq = onlineDeltaSendEnterCounter.incrementAndGet();
-            if (seq % 3 == 0) {
-            }
-            return;
-        }
-        if ("snapshot".equals(channel)) {
-            long seq = onlineSnapshotSendEnterCounter.incrementAndGet();
-            if (seq % 3 == 0) {
-            }
-            return;
-        }
-        if ("debug_time".equals(channel)) {
-            long seq = onlineDebugTimeSendEnterCounter.incrementAndGet();
-            if (seq % 3 == 0) {
-            }
-        }
     }
 
     private List<FriendListVO> buildHomeFriendSnapshot(Integer myUserCode) {
