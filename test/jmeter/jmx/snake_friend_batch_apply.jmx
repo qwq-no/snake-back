@@ -1,0 +1,226 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
+  <hashTree>
+    <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="Snake — 批量加好友（→ 010064）">
+      <stringProp name="TestPlan.comments">所有测试用户向 010064 发送好友申请。
+流程：读取CSV → 登录拿新token(Groovy) → friendApply(Groovy) → 去前端确认。
+50 线程 × 10 循环 = 500 申请。</stringProp>
+      <boolProp name="TestPlan.serialize_threadgroups">true</boolProp>
+      <boolProp name="TestPlan.tearDown_on_shutdown">true</boolProp>
+      <elementProp name="TestPlan.user_defined_variables" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments" testname="User Defined Variables">
+        <collectionProp name="Arguments.arguments">
+          <elementProp name="HOST" elementType="Argument">
+            <stringProp name="Argument.name">HOST</stringProp>
+            <stringProp name="Argument.value">localhost</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="PORT" elementType="Argument">
+            <stringProp name="Argument.name">PORT</stringProp>
+            <stringProp name="Argument.value">8086</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+        </collectionProp>
+      </elementProp>
+    </TestPlan>
+    <hashTree>
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="批量加好友（10线程 × 50轮）">
+        <intProp name="ThreadGroup.num_threads">10</intProp>
+        <intProp name="ThreadGroup.ramp_time">10</intProp>
+        <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" testname="Loop Controller">
+          <stringProp name="LoopController.loops">50</stringProp>
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+        </elementProp>
+      </ThreadGroup>
+      <hashTree>
+        <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="读取用户 CSV" enabled="true">
+          <stringProp name="delimiter">,</stringProp>
+          <stringProp name="fileEncoding">UTF-8</stringProp>
+          <stringProp name="filename">test_users.csv</stringProp>
+          <boolProp name="ignoreFirstLine">true</boolProp>
+          <boolProp name="quotedData">false</boolProp>
+          <boolProp name="recycle">false</boolProp>
+          <stringProp name="shareMode">shareMode.thread</stringProp>
+          <boolProp name="stopThread">true</boolProp>
+          <stringProp name="variableNames">userCode,username,password,accessToken</stringProp>
+        </CSVDataSet>
+        <hashTree/>
+        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="登录 → 发好友申请" enabled="true">
+          <stringProp name="cacheKey">false</stringProp>
+          <stringProp name="script">import groovy.json.JsonSlurper
+import groovy.json.JsonOutput
+
+def host = vars.get(&quot;HOST&quot;)
+def port = vars.get(&quot;PORT&quot;)
+def username = vars.get(&quot;username&quot;)
+def password = vars.get(&quot;password&quot;)
+
+def MAX_RETRIES = 3
+
+// ① 登录（带死锁重试）
+def newToken = null
+def myUC = null
+
+for (int attempt = 1; attempt &lt;= MAX_RETRIES; attempt++) {
+    try {
+        def loginBody = JsonOutput.toJson([username: username, password: password])
+        def loginConn = new URL(&quot;http://${host}:${port}/api/user/login&quot;).openConnection()
+        loginConn.setConnectTimeout(5000)
+        loginConn.setReadTimeout(5000)
+        loginConn.setRequestMethod(&quot;POST&quot;)
+        loginConn.setDoOutput(true)
+        loginConn.setRequestProperty(&quot;Content-Type&quot;, &quot;application/json&quot;)
+        loginConn.outputStream.withWriter { it.write(loginBody) }
+
+        def loginResp = loginConn.inputStream.text
+        def loginJson = new JsonSlurper().parseText(loginResp)
+
+        if (loginJson.code == 1) {
+            newToken = loginJson.data.accessToken
+            myUC = loginJson.data.user.userCode
+            break
+        }
+
+        def msg = loginJson.msg ?: &quot;unknown&quot;
+        if (attempt == MAX_RETRIES) {
+            SampleResult.setSuccessful(false)
+            SampleResult.setResponseMessage(&quot;Login failed after ${MAX_RETRIES} retries: ${msg}&quot;)
+            return
+        }
+        Thread.sleep(200 * attempt)
+    } catch (Exception e) {
+        if (attempt == MAX_RETRIES) {
+            SampleResult.setSuccessful(false)
+            SampleResult.setResponseMessage(&quot;Login error: ${e.message}&quot;)
+            return
+        }
+        Thread.sleep(300 * attempt)
+    }
+}
+
+// ② 发好友申请 → 010064（带死锁重试）
+for (int attempt = 1; attempt &lt;= MAX_RETRIES; attempt++) {
+    try {
+        def applyBody = JsonOutput.toJson([myUserCode: myUC as Integer, otherUserCode: 10064])
+        def applyConn = new URL(&quot;http://${host}:${port}/api/friendRequest/friendApply&quot;).openConnection()
+        applyConn.setConnectTimeout(5000)
+        applyConn.setReadTimeout(5000)
+        applyConn.setRequestMethod(&quot;POST&quot;)
+        applyConn.setDoOutput(true)
+        applyConn.setRequestProperty(&quot;Content-Type&quot;, &quot;application/json&quot;)
+        applyConn.setRequestProperty(&quot;Authorization&quot;, &quot;Bearer ${newToken}&quot;)
+        applyConn.outputStream.withWriter { it.write(applyBody) }
+
+        def applyResp = applyConn.inputStream.text
+        def applyJson = new JsonSlurper().parseText(applyResp)
+
+        if (applyJson.code == 1) {
+            SampleResult.setSuccessful(true)
+            SampleResult.setResponseMessage(&quot;OK: ${myUC} → 10064&quot;)
+            return
+        } else if (applyJson.msg?.contains(&quot;已经是好友&quot;) || applyJson.msg?.contains(&quot;已经发送过&quot;)) {
+            // 已经申请过或已经是好友，跳过（之前跑成功的残留）
+            SampleResult.setSuccessful(true)
+            SampleResult.setResponseMessage(&quot;Skip: ${applyJson.msg}&quot;)
+            return
+        }
+
+        if (attempt == MAX_RETRIES) {
+            SampleResult.setSuccessful(false)
+            SampleResult.setResponseMessage(&quot;Apply failed: ${applyJson.msg ?: 'unknown'}&quot;)
+            return
+        }
+        Thread.sleep(200 * attempt)
+    } catch (Exception e) {
+        if (attempt == MAX_RETRIES) {
+            SampleResult.setSuccessful(false)
+            SampleResult.setResponseMessage(&quot;Apply error: ${e.message}&quot;)
+            return
+        }
+        Thread.sleep(300 * attempt)
+    }
+}</stringProp>
+          <stringProp name="scriptLanguage">groovy</stringProp>
+          <stringProp name="parameters"></stringProp>
+          <stringProp name="filename"></stringProp>
+        </JSR223Sampler>
+        <hashTree/>
+      </hashTree>
+      <ResultCollector guiclass="ViewResultsFullVisualizer" testclass="ResultCollector" testname="察看结果树" enabled="true">
+        <boolProp name="ResultCollector.error_logging">false</boolProp>
+        <objProp>
+          <name>saveConfig</name>
+          <value class="SampleSaveConfiguration">
+            <time>true</time>
+            <latency>true</latency>
+            <timestamp>true</timestamp>
+            <success>true</success>
+            <label>true</label>
+            <code>true</code>
+            <message>true</message>
+            <threadName>true</threadName>
+            <dataType>true</dataType>
+            <encoding>false</encoding>
+            <assertions>true</assertions>
+            <subresults>true</subresults>
+            <responseData>false</responseData>
+            <samplerData>false</samplerData>
+            <xml>false</xml>
+            <fieldNames>true</fieldNames>
+            <responseHeaders>false</responseHeaders>
+            <requestHeaders>false</requestHeaders>
+            <responseDataOnError>false</responseDataOnError>
+            <saveAssertionResultsFailureMessage>true</saveAssertionResultsFailureMessage>
+            <assertionsResultsToSave>0</assertionsResultsToSave>
+            <bytes>true</bytes>
+            <sentBytes>true</sentBytes>
+            <url>true</url>
+            <threadCounts>true</threadCounts>
+            <idleTime>true</idleTime>
+            <connectTime>true</connectTime>
+          </value>
+        </objProp>
+        <stringProp name="filename"></stringProp>
+      </ResultCollector>
+      <hashTree/>
+      <ResultCollector guiclass="SummaryReport" testclass="ResultCollector" testname="聚合报告" enabled="true">
+        <boolProp name="ResultCollector.error_logging">false</boolProp>
+        <objProp>
+          <name>saveConfig</name>
+          <value class="SampleSaveConfiguration">
+            <time>true</time>
+            <latency>true</latency>
+            <timestamp>true</timestamp>
+            <success>true</success>
+            <label>true</label>
+            <code>true</code>
+            <message>true</message>
+            <threadName>true</threadName>
+            <dataType>true</dataType>
+            <encoding>false</encoding>
+            <assertions>true</assertions>
+            <subresults>true</subresults>
+            <responseData>false</responseData>
+            <samplerData>false</samplerData>
+            <xml>false</xml>
+            <fieldNames>true</fieldNames>
+            <responseHeaders>false</responseHeaders>
+            <requestHeaders>false</requestHeaders>
+            <responseDataOnError>false</responseDataOnError>
+            <saveAssertionResultsFailureMessage>true</saveAssertionResultsFailureMessage>
+            <assertionsResultsToSave>0</assertionsResultsToSave>
+            <bytes>true</bytes>
+            <sentBytes>true</sentBytes>
+            <url>true</url>
+            <threadCounts>true</threadCounts>
+            <idleTime>true</idleTime>
+            <connectTime>true</connectTime>
+          </value>
+        </objProp>
+        <stringProp name="filename"></stringProp>
+      </ResultCollector>
+      <hashTree/>
+    </hashTree>
+  </hashTree>
+</jmeterTestPlan>

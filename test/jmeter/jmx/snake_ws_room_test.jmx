@@ -1,0 +1,316 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
+  <hashTree>
+    <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="Snake — WebSocket 房间生命周期压测（Phase 2B）">
+      <stringProp name="TestPlan.comments">模拟 join-ready-leave 完整流程。线程按编号分配到10个房间（线程N到房间N%10+1），避免单房间超限。无需心跳（单线程不到30秒）。</stringProp>
+      <boolProp name="TestPlan.functional_mode">false</boolProp>
+      <boolProp name="TestPlan.tearDown_on_shutdown">true</boolProp>
+      <boolProp name="TestPlan.serialize_threadgroups">true</boolProp>
+      <elementProp name="TestPlan.user_defined_variables" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments" testname="User Defined Variables">
+        <collectionProp name="Arguments.arguments">
+          <elementProp name="HOST" elementType="Argument">
+            <stringProp name="Argument.name">HOST</stringProp>
+            <stringProp name="Argument.value">localhost</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="PORT" elementType="Argument">
+            <stringProp name="Argument.name">PORT</stringProp>
+            <stringProp name="Argument.value">8086</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="ROOM_COUNT" elementType="Argument">
+            <stringProp name="Argument.name">ROOM_COUNT</stringProp>
+            <stringProp name="Argument.value">10</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+        </collectionProp>
+      </elementProp>
+    </TestPlan>
+    <hashTree>
+
+      <!-- setUp: 共享 HttpClient -->
+      <SetupThreadGroup guiclass="SetupThreadGroupGui" testclass="SetupThreadGroup" testname="setUp - 共享 HttpClient">
+        <intProp name="ThreadGroup.num_threads">1</intProp>
+        <intProp name="ThreadGroup.ramp_time">1</intProp>
+        <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" testname="Loop Controller">
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+          <stringProp name="LoopController.loops">1</stringProp>
+        </elementProp>
+      </SetupThreadGroup>
+      <hashTree>
+        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="创建共享 HttpClient" enabled="true">
+          <stringProp name="cacheKey">false</stringProp>
+          <stringProp name="script">import java.net.http.HttpClient
+import java.util.concurrent.Executors
+
+def client = HttpClient.newBuilder()
+    .executor(Executors.newCachedThreadPool())
+    .build()
+props.put("sharedClient", client)
+SampleResult.setResponseCode("200")
+SampleResult.setResponseMessage("HttpClient ready")
+SampleResult.setSuccessful(true)</stringProp>
+          <stringProp name="scriptLanguage">groovy</stringProp>
+        </JSR223Sampler>
+        <hashTree/>
+      </hashTree>
+
+      <!-- ================================================================ -->
+      <!-- 房间生命周期（50 线程 × 10 轮，每轮 join→ready→leave）       -->
+      <!-- ================================================================ -->
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="房间生命周期（50线程 × 10轮）">
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <intProp name="ThreadGroup.num_threads">200</intProp>
+        <intProp name="ThreadGroup.ramp_time">20</intProp>
+        <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" testname="Loop Controller">
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+          <stringProp name="LoopController.loops">10</stringProp>
+        </elementProp>
+      </ThreadGroup>
+      <hashTree>
+        <CSVDataSet guiclass="TestBeanGUI" testclass="CSVDataSet" testname="读取用户">
+          <stringProp name="delimiter">,</stringProp>
+          <stringProp name="fileEncoding">UTF-8</stringProp>
+          <stringProp name="filename">test_users.csv</stringProp>
+          <boolProp name="ignoreFirstLine">true</boolProp>
+          <boolProp name="quotedData">false</boolProp>
+          <boolProp name="recycle">true</boolProp>
+          <stringProp name="shareMode">shareMode.thread</stringProp>
+          <stringProp name="stopThread">false</stringProp>
+          <stringProp name="variableNames">userCode,username,password,accessToken</stringProp>
+        </CSVDataSet>
+        <hashTree/>
+
+        <!-- ① 打开 WS -->
+        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="① 打开 WS 连接" enabled="true">
+          <stringProp name="cacheKey">false</stringProp>
+          <stringProp name="script">import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.WebSocket
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CompletionStage
+import java.util.concurrent.TimeUnit
+
+def host = vars.get("HOST")
+def port = vars.get("PORT")
+def wsUrl = "ws://" + host + ":" + port + "/ws/game"
+def latch = new CompletableFuture()
+def errorRef = new Object[1]
+
+def listener = new WebSocket.Listener() {
+    void onOpen(WebSocket w) {
+        latch.complete(null)
+        w.request(1)
+    }
+    CompletionStage onText(WebSocket w, CharSequence data, boolean last) {
+        w.request(1)
+        return null
+    }
+    void onError(WebSocket w, Throwable t) {
+        errorRef[0] = t
+        latch.complete(null)
+    }
+    CompletionStage onClose(WebSocket w, int code, String reason) {
+        return null
+    }
+}
+
+def client = props.get("sharedClient") as HttpClient
+def ws = client.newWebSocketBuilder()
+    .buildAsync(URI.create(wsUrl), listener)
+    .get(5, TimeUnit.SECONDS)
+
+latch.get(5, TimeUnit.SECONDS)
+if (errorRef[0] != null) {
+    throw new RuntimeException("handshake failed: " + errorRef[0].getMessage())
+}
+
+props.put("ws_" + ctx.getThreadNum(), ws)
+SampleResult.setResponseCode("101")
+SampleResult.setResponseMessage("connected")
+SampleResult.setSuccessful(true)</stringProp>
+          <stringProp name="scriptLanguage">groovy</stringProp>
+        </JSR223Sampler>
+        <hashTree/>
+
+        <!-- ② Connect（pageType: select） -->
+        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="② 发送 connect" enabled="true">
+          <stringProp name="cacheKey">false</stringProp>
+          <stringProp name="script">import java.util.concurrent.TimeUnit
+
+def ws = props.get("ws_" + ctx.getThreadNum())
+def uc = vars.get("userCode")
+def msg = '{"type":"connect","pageType":"select","userCode":"' + uc + '"}'
+ws.sendText(msg, true).get(3, TimeUnit.SECONDS)
+SampleResult.setResponseCode("200")
+SampleResult.setResponseMessage("connected as " + uc)
+SampleResult.setSuccessful(true)</stringProp>
+          <stringProp name="scriptLanguage">groovy</stringProp>
+        </JSR223Sampler>
+        <hashTree/>
+
+        <!-- ③ Join 房间（线程N → 房间 N%ROOM_COUNT + 1） -->
+        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="③ Join 房间" enabled="true">
+          <stringProp name="cacheKey">false</stringProp>
+          <stringProp name="script">import java.util.concurrent.TimeUnit
+
+def ws = props.get("ws_" + ctx.getThreadNum())
+def roomCount = (vars.get("ROOM_COUNT") as int)
+def roomCode = (ctx.getThreadNum() % roomCount) + 1
+def msg = '{"type":"join","pageType":"select","roomCode":' + roomCode + '}'
+ws.sendText(msg, true).get(3, TimeUnit.SECONDS)
+vars.put("roomCode", String.valueOf(roomCode))
+SampleResult.setResponseCode("200")
+SampleResult.setResponseMessage("joined room " + roomCode)
+SampleResult.setSuccessful(true)</stringProp>
+          <stringProp name="scriptLanguage">groovy</stringProp>
+        </JSR223Sampler>
+        <hashTree/>
+
+        <!-- ④ Page change → prepare -->
+        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="④ page_change → prepare" enabled="true">
+          <stringProp name="cacheKey">false</stringProp>
+          <stringProp name="script">import java.util.concurrent.TimeUnit
+
+def ws = props.get("ws_" + ctx.getThreadNum())
+def rc = vars.get("roomCode")
+def msg = '{"type":"page_change","pageType":"prepare","roomCode":' + rc + '}'
+ws.sendText(msg, true).get(3, TimeUnit.SECONDS)
+SampleResult.setResponseCode("200")
+SampleResult.setResponseMessage("page=prepare room=" + rc)
+SampleResult.setSuccessful(true)</stringProp>
+          <stringProp name="scriptLanguage">groovy</stringProp>
+        </JSR223Sampler>
+        <hashTree/>
+
+        <!-- ⑤ Ready -->
+        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="⑤ 发送 ready" enabled="true">
+          <stringProp name="cacheKey">false</stringProp>
+          <stringProp name="script">import java.util.concurrent.TimeUnit
+
+def ws = props.get("ws_" + ctx.getThreadNum())
+ws.sendText('{"type":"ready","pageType":"prepare"}', true).get(3, TimeUnit.SECONDS)
+SampleResult.setResponseCode("200")
+SampleResult.setResponseMessage("ready")
+SampleResult.setSuccessful(true)</stringProp>
+          <stringProp name="scriptLanguage">groovy</stringProp>
+        </JSR223Sampler>
+        <hashTree>
+          <ConstantTimer guiclass="ConstantTimerGui" testclass="ConstantTimer" testname="等待 1s" enabled="true">
+            <stringProp name="ConstantTimer.delay">1000</stringProp>
+          </ConstantTimer>
+          <hashTree/>
+        </hashTree>
+
+        <!-- ⑥ Leave -->
+        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="⑥ 离开房间" enabled="true">
+          <stringProp name="cacheKey">false</stringProp>
+          <stringProp name="script">import java.util.concurrent.TimeUnit
+
+def ws = props.get("ws_" + ctx.getThreadNum())
+ws.sendText('{"type":"leave","pageType":"prepare"}', true).get(3, TimeUnit.SECONDS)
+SampleResult.setResponseCode("200")
+SampleResult.setResponseMessage("left")
+SampleResult.setSuccessful(true)</stringProp>
+          <stringProp name="scriptLanguage">groovy</stringProp>
+        </JSR223Sampler>
+        <hashTree/>
+
+        <!-- ⑦ 关闭 WS -->
+        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="⑦ 关闭 WS" enabled="true">
+          <stringProp name="cacheKey">false</stringProp>
+          <stringProp name="script">def ws = props.remove("ws_" + ctx.getThreadNum())
+if (ws != null) {
+    try {
+        ws.sendClose(1000, "done").get(2, java.util.concurrent.TimeUnit.SECONDS)
+    } catch (Exception ignored) {}
+}
+SampleResult.setResponseCode("200")
+SampleResult.setResponseMessage("closed")
+SampleResult.setSuccessful(true)</stringProp>
+          <stringProp name="scriptLanguage">groovy</stringProp>
+        </JSR223Sampler>
+        <hashTree/>
+      </hashTree>
+
+      <!-- ===== 监听器 ===== -->
+      <ResultCollector guiclass="ViewResultsFullVisualizer" testclass="ResultCollector" testname="察看结果树">
+        <boolProp name="ResultCollector.error_logging">false</boolProp>
+        <objProp>
+          <name>saveConfig</name>
+          <value class="SampleSaveConfiguration">
+            <time>true</time>
+            <latency>true</latency>
+            <timestamp>true</timestamp>
+            <success>true</success>
+            <label>true</label>
+            <code>true</code>
+            <message>true</message>
+            <threadName>true</threadName>
+            <dataType>true</dataType>
+            <encoding>false</encoding>
+            <assertions>true</assertions>
+            <subresults>true</subresults>
+            <responseData>false</responseData>
+            <samplerData>false</samplerData>
+            <xml>false</xml>
+            <fieldNames>true</fieldNames>
+            <responseHeaders>false</responseHeaders>
+            <requestHeaders>false</requestHeaders>
+            <responseDataOnError>false</responseDataOnError>
+            <saveAssertionResultsFailureMessage>true</saveAssertionResultsFailureMessage>
+            <assertionsResultsToSave>0</assertionsResultsToSave>
+            <bytes>true</bytes>
+            <sentBytes>true</sentBytes>
+            <url>true</url>
+            <threadCounts>true</threadCounts>
+            <idleTime>true</idleTime>
+            <connectTime>true</connectTime>
+          </value>
+        </objProp>
+        <stringProp name="filename"></stringProp>
+      </ResultCollector>
+      <hashTree/>
+      <ResultCollector guiclass="SummaryReport" testclass="ResultCollector" testname="聚合报告">
+        <boolProp name="ResultCollector.error_logging">false</boolProp>
+        <objProp>
+          <name>saveConfig</name>
+          <value class="SampleSaveConfiguration">
+            <time>true</time>
+            <latency>true</latency>
+            <timestamp>true</timestamp>
+            <success>true</success>
+            <label>true</label>
+            <code>true</code>
+            <message>true</message>
+            <threadName>true</threadName>
+            <dataType>true</dataType>
+            <encoding>false</encoding>
+            <assertions>true</assertions>
+            <subresults>true</subresults>
+            <responseData>false</responseData>
+            <samplerData>false</samplerData>
+            <xml>false</xml>
+            <fieldNames>true</fieldNames>
+            <responseHeaders>false</responseHeaders>
+            <requestHeaders>false</requestHeaders>
+            <responseDataOnError>false</responseDataOnError>
+            <saveAssertionResultsFailureMessage>true</saveAssertionResultsFailureMessage>
+            <assertionsResultsToSave>0</assertionsResultsToSave>
+            <bytes>true</bytes>
+            <sentBytes>true</sentBytes>
+            <url>true</url>
+            <threadCounts>true</threadCounts>
+            <idleTime>true</idleTime>
+            <connectTime>true</connectTime>
+          </value>
+        </objProp>
+        <stringProp name="filename"></stringProp>
+      </ResultCollector>
+      <hashTree/>
+    </hashTree>
+  </hashTree>
+</jmeterTestPlan>
