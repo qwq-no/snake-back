@@ -11,14 +11,23 @@ import com.example.snake_back.pojo.dto.RoomState;
 import com.example.snake_back.pojo.dto.SnakeState;
 import com.example.snake_back.pojo.vo.EmojiMessageVO;
 import com.example.snake_back.pojo.vo.RoomSummaryVO;
-import com.example.snake_back.service.OnlineService;
 import com.example.snake_back.service.BroadcastService;
+import com.example.snake_back.service.OnlineService;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
+@Slf4j
 @Service
 public class OnlineServiceImpl implements OnlineService {
     private final UserMapper userMapper;
@@ -29,6 +38,13 @@ public class OnlineServiceImpl implements OnlineService {
     private final PageUtil  pageUtil;
     private final RoomUtil  roomUtil;
     private final SessionContextManager sessionContextManager;
+
+    /** 游戏房间并行处理线程池。每 tick 将各房间提交到此池并行执行，tick 等待所有房间完成后返回。 */
+    private final ExecutorService gameRoomExecutor = Executors.newFixedThreadPool(4, r -> {
+        Thread t = new Thread(r, "game-room-worker");
+        t.setDaemon(true);
+        return t;
+    });
 
     public OnlineServiceImpl(RoomStateManager roomStateManager, BroadcastService broadcastService,RoomSummaryManager roomSummaryManager,
                               PageUtil pageUtil, RoomUtil roomUtil, SessionContextManager sessionContextManager,
@@ -63,21 +79,23 @@ public class OnlineServiceImpl implements OnlineService {
             return;
         }
 
-        Integer snakeIndex = roomState.getUserCodeToSnakeIndex().remove(userCode);
-        roomStateManager.removeUserFromRoom(userCode);
+        synchronized (roomState) {
+            Integer snakeIndex = roomState.getUserCodeToSnakeIndex().remove(userCode);
+            roomStateManager.removeUserFromRoom(userCode);
 
-        RoomSummaryVO updatedSummary = roomSummaryManager.applyMemberChange(roomCode, userCode, false);
-        broadcastService.broadcastRoomSummary(updatedSummary);
+            RoomSummaryVO updatedSummary = roomSummaryManager.applyMemberChange(roomCode, userCode, false);
+            broadcastService.broadcastRoomSummary(updatedSummary);
 
-        if (snakeIndex != null) {
-            handlePlayerLeaveSnake(roomState, snakeIndex);
-        }
+            if (snakeIndex != null) {
+                handlePlayerLeaveSnake(roomState, snakeIndex);
+            }
 
-        Set<String> members = roomStateManager.getRoomMembers().get(roomCode);
-        if (members == null || members.isEmpty()) {
-            roomUtil.resetRoom(roomState);
-        } else if ("playing".equals(roomState.getStatus()) || "finished".equals(roomState.getStatus())) {
-            broadcastService.broadcastRoomState(roomState);
+            Set<String> members = roomStateManager.getRoomMembers().get(roomCode);
+            if (members == null || members.isEmpty()) {
+                roomUtil.resetRoom(roomState);
+            } else if ("playing".equals(roomState.getStatus()) || "finished".equals(roomState.getStatus())) {
+                broadcastService.broadcastRoomState(roomState);
+            }
         }
     }
 
@@ -93,11 +111,12 @@ public class OnlineServiceImpl implements OnlineService {
             default -> null;
         };
         if (newDirection == null) return;
+        inputCounter.incrementAndGet();
         Integer roomCode = roomStateManager.getRoomCodeByUserCode(userCode);
         if(roomCode!=null) {
             RoomState roomState = roomStateManager.getOrInitRoom(roomCode);
             Integer snakeIndex = roomState.getUserCodeToSnakeIndex().get(userCode);
-            if(snakeIndex!=null) {
+            if(snakeIndex != null && snakeIndex >= 0 && snakeIndex < roomState.getSnakes().size()) {
                 SnakeState snake = roomState.getSnakes().get(snakeIndex);
                 // 方向队列：保留最多 3 个，入队时不检查反向（消费时检查）
                 if (snake.getDirectionQueue() == null) {
@@ -199,47 +218,126 @@ public class OnlineServiceImpl implements OnlineService {
         RoomSummaryVO summary = roomSummaryManager.getRoom(roomCode);
         broadcastService.broadcastRoomSummary(summary);
     }
-    // KeepAlive: 150ms is the original rate but may cause WS blockage on slow network
+    /**
+     * gameTick: 150ms 固定频率处理所有游戏房间。
+     * 每个房间独立 synchronized(roomState)，通过 gameRoomExecutor 并行处理。
+     * tick 线程等待所有房间完成（最长 140ms），保持同步语义的同时并行化房间处理。
+     */
+    private long tickCount = 0;
+    private volatile long lastCancelled = 0;
+    private volatile long lastTickElapsedMs = 0;
+    private volatile int lastPlayingRooms = 0;
+    private final java.util.concurrent.atomic.AtomicLong inputCounter = new java.util.concurrent.atomic.AtomicLong(0);
+    private long lastInputCount = 0;
+    private long lastHealthTime = 0;
+
     @Scheduled(fixedRate = 150)
     public void gameTick() {
-        synchronized (this) {
-            for (RoomState roomState : roomStateManager.getRoomStates().values()) {
-                try {
-                    if (!"playing".equals(roomState.getStatus())) {
-                        continue;
-                    }
-                    int roomCode = roomState.getRoomCode();
-                    Set<String> members = roomStateManager.getRoomMembers().get(roomCode);
-                    int playerCount = members == null ? 0 : members.size();
-                    if(playerCount==0){
-                        roomState.setStatus("waiting");
-                        continue;
-                    }
+        tickCount++;
+        long tickStart = System.currentTimeMillis();
+        List<Callable<Void>> tasks = new ArrayList<>();
+        int playingRooms = 0;
+        for (RoomState roomState : roomStateManager.getRoomStates().values()) {
+            if (!"playing".equals(roomState.getStatus())) {
+                continue;
+            }
+            playingRooms++;
+            int roomCode = roomState.getRoomCode();
+            Set<String> members = roomStateManager.getRoomMembers().get(roomCode);
+            int playerCount = members == null ? 0 : members.size();
+            if (playerCount == 0) {
+                roomState.setStatus("waiting");
+                playingRooms--;
+                continue;
+            }
 
+            tasks.add(() -> {
+                synchronized (roomState) {
                     updateProps(roomState);
                     updateSnakes(roomState);
                     updateFruits(roomState);
                     handleRespawn(roomState);
                     delEmojis(roomState);
                     long now = System.currentTimeMillis();
-                    long remain = 600-(now - roomState.getGameStartTime()) / 1000;
-                    if(remain<0){remain=0;}
-                    roomState.setCountdownMin(remain/60);
-                    roomState.setCountdownSecond(remain%60);
+                    long remain = 600 - (now - roomState.getGameStartTime()) / 1000;
+                    if (remain < 0) {
+                        remain = 0;
+                    }
+                    roomState.setCountdownMin(remain / 60);
+                    roomState.setCountdownSecond(remain % 60);
 
-                    // finishGame 必须在 broadcastRoomDelta 之前调用，
-                    // 这样 delta 才会携带 status="finished" 通知前端游戏结束
-                    if(remain==0){finishGame(roomState);}
+                    if (remain == 0) {
+                        finishGame(roomState);
+                    }
 
                     broadcastService.broadcastRoomDelta(roomState);
-
-                } catch (Exception e) {
                 }
+                return null;
+            });
+        }
+
+        if (tasks.isEmpty()) {
+            return;
+        }
+
+        try {
+            List<Future<Void>> futures = gameRoomExecutor.invokeAll(tasks, 140, TimeUnit.MILLISECONDS);
+            long tickElapsed = System.currentTimeMillis() - tickStart;
+            long cancelled = futures.stream().filter(Future::isCancelled).count();
+            int broadcastQueueSize = broadcastService.getBroadcastQueueSize();
+
+            if (cancelled > 0) {
+                System.out.println("gameTick 过载: " + cancelled + "/" + tasks.size() + " 房间未处理, tick耗时" + tickElapsed + "ms, 广播队列" + broadcastQueueSize);
+            } else if (tickElapsed > 100 || broadcastQueueSize > 1500) {
+                System.out.println("gameTick 预警: " + tasks.size() + " 房间, tick耗时" + tickElapsed + "ms, 广播队列" + broadcastQueueSize);
+            } else if (tickCount % 20 == 0) {
+                System.out.println("gameTick 心跳: #" + tickCount + " " + playingRooms + "房, tick" + tickElapsed + "ms, 队列" + broadcastQueueSize);
             }
+            lastCancelled = cancelled;
+            lastTickElapsedMs = tickElapsed;
+            lastPlayingRooms = playingRooms;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
     }
 
+    // 独立于 gameTick 的健康监控，每 3 秒一次
+    @Scheduled(fixedRate = 3000)
+    public void healthMonitor() {
+        int playingRooms = 0;
+        int totalPlayers = 0;
+        for (RoomState rs : roomStateManager.getRoomStates().values()) {
+            if ("playing".equals(rs.getStatus())) {
+                playingRooms++;
+                Set<String> m = roomStateManager.getRoomMembers().get(rs.getRoomCode());
+                if (m != null) totalPlayers += m.size();
+            }
+        }
+        if (playingRooms == 0) return;
 
+        long now = System.currentTimeMillis();
+        long totalInputs = inputCounter.get();
+        long intervalMs = lastHealthTime > 0 ? (now - lastHealthTime) : 3000;
+        long inputRate = lastHealthTime > 0 ? (totalInputs - lastInputCount) * 1000 / intervalMs : 0;
+        lastInputCount = totalInputs;
+        lastHealthTime = now;
+
+        int totalSessions = sessionContextManager.getSessionContextMap().size();
+        int broadcastQueue = broadcastService.getBroadcastQueueSize();
+        String verdict;
+        if (lastCancelled > 0) {
+            verdict = "!!! 过载:" + lastCancelled + "/" + lastPlayingRooms + "房跳过 !!!";
+        } else if (inputRate < 100 && totalPlayers > 500) {
+            verdict = "WARN input流速异常:" + inputRate + "/s";
+        } else if (broadcastQueue > 1800) {
+            verdict = "WARN 广播队列:" + broadcastQueue;
+        } else if (broadcastQueue > 1000) {
+            verdict = "广播队列偏高:" + broadcastQueue;
+        } else {
+            verdict = "正常";
+        }
+        System.out.println("[健康] " + verdict + " | WS:" + totalSessions + " 房:" + playingRooms + " 玩家:" + totalPlayers + " 输入:" + inputRate + "/s 队列:" + broadcastQueue);
+    }
 
     public void assignHumanSnakeToNewPlayer(RoomState roomState, String userCode) {
         // 先检查用户是否已经拥有一条蛇（例如：关闭浏览器后短时间内重连）
@@ -284,7 +382,31 @@ public class OnlineServiceImpl implements OnlineService {
             }
         }
 
-        throw new IllegalStateException("当前房间没有可替换的人机蛇");
+        // 没有可替换的 AI 蛇：动态新增一条蛇给新玩家
+        SnakeState newSnake = new SnakeState();
+        newSnake.setBody(new ArrayList<>());
+        newSnake.setDirection(null);
+        newSnake.setDirectionNext(null);
+        newSnake.setAlive(true);
+        newSnake.setRespawnTimer(0);
+        newSnake.setChangeDirTimer(0);
+        newSnake.setDirX(0);
+        newSnake.setDirY(0);
+        newSnake.setMoveInterval(2);
+        newSnake.setMoveCounter(0);
+        newSnake.setEmojiTimer(0);
+        SnakeState.PropsTimer propsTimer = new SnakeState.PropsTimer();
+        propsTimer.setSpeedUp(0);
+        propsTimer.setSpeedDown(0);
+        propsTimer.setRevealAll(0);
+        propsTimer.setFog(0);
+        newSnake.setPropsTimer(propsTimer);
+        newSnake.setType("human");
+        newSnake.setOwnerUserCode(userCode);
+        roomUtil.refreshSnake(roomState, newSnake);
+        int newIndex = roomState.getSnakes().size();
+        roomState.getSnakes().add(newSnake);
+        roomState.getUserCodeToSnakeIndex().put(userCode, newIndex);
     }
 
     private void snakeDieAndConvertToFruit(RoomState roomState, int snakeIndex, String deathReason) {

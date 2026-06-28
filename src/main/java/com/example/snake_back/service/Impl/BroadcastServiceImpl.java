@@ -5,50 +5,24 @@ import com.example.snake_back.manager.GroupChatManager;
 import com.example.snake_back.manager.RoomStateManager;
 import com.example.snake_back.manager.RoomSummaryManager;
 import com.example.snake_back.manager.SessionContextManager;
-import com.example.snake_back.pojo.dto.Node;
-import com.example.snake_back.pojo.dto.RoomState;
-import com.example.snake_back.pojo.dto.SnakeState;
-import com.example.snake_back.pojo.dto.SessionContextDTO;
-import com.example.snake_back.pojo.dto.WsResponse;
+import com.example.snake_back.mapper.UserMapper;
+import com.example.snake_back.pojo.dto.*;
 import com.example.snake_back.pojo.entity.User;
-import com.example.snake_back.pojo.vo.FriendListVO;
-import com.example.snake_back.pojo.vo.GroupChatMessageVO;
-import com.example.snake_back.pojo.vo.EmojiMessageVO;
-import com.example.snake_back.pojo.vo.RoomDeltaVO;
-import com.example.snake_back.pojo.vo.RoomLobbyStateVO;
-import com.example.snake_back.pojo.vo.RoomSnapshotVO;
-import com.example.snake_back.pojo.vo.RoomSummaryVO;
-import com.example.snake_back.pojo.vo.PointVO;
-import com.example.snake_back.pojo.vo.SnakeDeltaVO;
-import com.example.snake_back.pojo.vo.SnakeSnapshotVO;
+import com.example.snake_back.pojo.vo.*;
 import com.example.snake_back.service.BroadcastService;
 import com.example.snake_back.service.FriendshipService;
-import com.example.snake_back.mapper.UserMapper;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.annotation.PreDestroy;
 import org.springframework.stereotype.Service;
+import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
 import org.springframework.web.socket.WebSocketSession;
-import org.springframework.web.socket.CloseStatus;
 
-import jakarta.annotation.PreDestroy;
 import java.io.IOException;
-import java.util.ArrayDeque;
-import java.util.ArrayList;
-import java.util.Deque;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
-import java.util.Objects;
-import java.util.Arrays;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.*;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
 
 @Service
 public class BroadcastServiceImpl implements BroadcastService {
@@ -60,11 +34,10 @@ public class BroadcastServiceImpl implements BroadcastService {
     private final FriendshipService friendshipService;
     private final UserMapper userMapper;
     private final ExecutorService roomStateBroadcastExecutor = new ThreadPoolExecutor(
-        2, 4, 60L, TimeUnit.SECONDS, new LinkedBlockingQueue<>(512),
+        4, 8, 60L, TimeUnit.SECONDS, new LinkedBlockingQueue<>(2048),
         Executors.defaultThreadFactory(),
         new ThreadPoolExecutor.CallerRunsPolicy()
     );
-    private final ExecutorService onlineSendExecutor = Executors.newFixedThreadPool(4);
     private final Map<Integer, RoomSnapshotVO> lastRoomSnapshots = new ConcurrentHashMap<>();
     private final AtomicLong onlineDeltaBroadcastCounter = new AtomicLong(0);
     private final AtomicLong onlineSnapshotBroadcastCounter = new AtomicLong(0);
@@ -231,21 +204,20 @@ public class BroadcastServiceImpl implements BroadcastService {
 
         String json = toJson(response);
 
+        // 一个房间一个任务，内部循环发所有人（与 broadcastRoomSnapshot 一致）
         final String finalLobbyJson = json;
-        for (String userCode : members) {
-            String sessionId = sessionContextManager.getUserCodeToSessionIdMap().get(userCode);
-            SessionContextDTO context = sessionId == null ? null : sessionContextManager.getSessionContextMap().get(sessionId);
-            WebSocketSession session = context == null ? null : context.getSession();
-            if (session == null || !session.isOpen()) {
-                continue;
-            }
-            roomStateBroadcastExecutor.execute(() -> {
+        roomStateBroadcastExecutor.execute(() -> {
+            for (String userCode : members) {
+                String sessionId = sessionContextManager.getUserCodeToSessionIdMap().get(userCode);
+                SessionContextDTO context = sessionId == null ? null : sessionContextManager.getSessionContextMap().get(sessionId);
+                WebSocketSession session = context == null ? null : context.getSession();
+                if (session == null || !session.isOpen()) continue;
                 try {
                     session.sendMessage(new TextMessage(finalLobbyJson));
                 } catch (IOException e) {
                 }
-            });
-        }
+            }
+        });
     }
 
     @Override
@@ -275,7 +247,9 @@ public class BroadcastServiceImpl implements BroadcastService {
         RoomSnapshotVO currentSnapshot = toRoomSnapshot(roomState);
         RoomSnapshotVO previousSnapshot = lastRoomSnapshots.get(roomCode);
         if (previousSnapshot == null) {
-            broadcastRoomSnapshot(roomState);
+            // 全量快照已通过 initGame()/joinRoom()/pushSnapshot() 按需发送，
+            // 这里只缓存供后续 delta 计算，避免对全房间成员重复广播
+            lastRoomSnapshots.put(roomCode, currentSnapshot);
             return;
         }
 
@@ -290,16 +264,17 @@ public class BroadcastServiceImpl implements BroadcastService {
                 setData(keepAliveDelta);
             }});
             lastRoomSnapshots.put(roomCode, currentSnapshot);
-            for (String userCode : members) {
-                String sessionId = sessionContextManager.getUserCodeToSessionIdMap().get(userCode);
-                SessionContextDTO context = sessionId == null ? null : sessionContextManager.getSessionContextMap().get(sessionId);
-                WebSocketSession session = context == null ? null : context.getSession();
-                if (session == null || !session.isOpen()) continue;
-                String finalJson = keepAliveJson;
-                roomStateBroadcastExecutor.execute(() ->
-                    sendOnlineMessage(session, userCode, "delta", roomCode, finalJson)
-                );
-            }
+            // 一个房间一个任务，内部循环发所有人，避免每 tick 1000+ 个 execute 撑爆队列
+            final String finalKeepAliveJson = keepAliveJson;
+            roomStateBroadcastExecutor.execute(() -> {
+                for (String userCode : members) {
+                    String sessionId = sessionContextManager.getUserCodeToSessionIdMap().get(userCode);
+                    SessionContextDTO context = sessionId == null ? null : sessionContextManager.getSessionContextMap().get(sessionId);
+                    WebSocketSession session = context == null ? null : context.getSession();
+                    if (session == null || !session.isOpen()) continue;
+                    sendOnlineMessage(session, userCode, "delta", roomCode, finalKeepAliveJson);
+                }
+            });
             return;
         }
 
@@ -315,21 +290,18 @@ public class BroadcastServiceImpl implements BroadcastService {
 
         lastRoomSnapshots.put(roomCode, currentSnapshot);
 
-        for (String userCode : members) {
-            String sessionId = sessionContextManager.getUserCodeToSessionIdMap().get(userCode);
-            SessionContextDTO context = sessionId == null ? null : sessionContextManager.getSessionContextMap().get(sessionId);
-            WebSocketSession session = context == null ? null : context.getSession();
-            if (session == null || !session.isOpen()) continue;
-
-            if (closeStaleSessionIfNeeded(session)) {
-                continue;
+        // 一个房间一个任务，内部循环发所有人
+        final String finalJson = json;
+        roomStateBroadcastExecutor.execute(() -> {
+            for (String userCode : members) {
+                String sessionId = sessionContextManager.getUserCodeToSessionIdMap().get(userCode);
+                SessionContextDTO context = sessionId == null ? null : sessionContextManager.getSessionContextMap().get(sessionId);
+                WebSocketSession session = context == null ? null : context.getSession();
+                if (session == null || !session.isOpen()) continue;
+                if (closeStaleSessionIfNeeded(session)) continue;
+                sendOnlineMessage(session, userCode, "delta", roomCode, finalJson);
             }
-
-            String finalJson = json;
-            roomStateBroadcastExecutor.execute(() ->
-                sendOnlineMessage(session, userCode, "delta", roomCode, finalJson)
-            );
-        }
+        });
     }
 
     private void broadcastRoomSnapshot(RoomState roomState) {
@@ -355,21 +327,18 @@ public class BroadcastServiceImpl implements BroadcastService {
 
         lastRoomSnapshots.put(roomCode, snapshot);
 
-        for (String userCode : members) {
-            String sessionId = sessionContextManager.getUserCodeToSessionIdMap().get(userCode);
-            SessionContextDTO context = sessionId == null ? null : sessionContextManager.getSessionContextMap().get(sessionId);
-            WebSocketSession session = context == null ? null : context.getSession();
-            if (session == null || !session.isOpen()) continue;
-
-            if (closeStaleSessionIfNeeded(session)) {
-                continue;
+        // 一个房间一个任务，内部循环发所有人
+        final String finalSnapshotJson = json;
+        roomStateBroadcastExecutor.execute(() -> {
+            for (String userCode : members) {
+                String sessionId = sessionContextManager.getUserCodeToSessionIdMap().get(userCode);
+                SessionContextDTO context = sessionId == null ? null : sessionContextManager.getSessionContextMap().get(sessionId);
+                WebSocketSession session = context == null ? null : context.getSession();
+                if (session == null || !session.isOpen()) continue;
+                if (closeStaleSessionIfNeeded(session)) continue;
+                sendOnlineMessage(session, userCode, "snapshot", roomCode, finalSnapshotJson);
             }
-
-            String finalJson = json;
-            roomStateBroadcastExecutor.execute(() ->
-                sendOnlineMessage(session, userCode, "snapshot", roomCode, finalJson)
-            );
-        }
+        });
     }
 
     @Override
@@ -408,13 +377,10 @@ public class BroadcastServiceImpl implements BroadcastService {
 
     private void sendOnlineMessage(WebSocketSession session, String userCode, String channel, Integer roomCode, String json) {
         if (session == null || !session.isOpen()) return;
-
-        onlineSendExecutor.execute(() -> {
-            try {
-                session.sendMessage(new TextMessage(json));
-            } catch (Exception ex) {
-            }
-        });
+        try {
+            session.sendMessage(new TextMessage(json));
+        } catch (Exception ex) {
+        }
     }
 
     private boolean closeStaleSessionIfNeeded(WebSocketSession session) {
@@ -522,19 +488,21 @@ public class BroadcastServiceImpl implements BroadcastService {
 
     private RoomSnapshotVO toRoomSnapshot(RoomState roomState) {
         RoomSnapshotVO snapshot = new RoomSnapshotVO();
-        snapshot.setRoomCode(roomState.getRoomCode());
-        snapshot.setCountdownMin(roomState.getCountdownMin());
-        snapshot.setCountdownSecond(roomState.getCountdownSecond());
-        snapshot.setGameStartTime(roomState.getGameStartTime());
-        snapshot.setStatus(roomState.getStatus());
-        snapshot.setMap(copyMap(roomState.getMap()));
-        snapshot.setSnakes(roomState.getSnakes().stream().map(this::toSnakeSnapshot).toList());
-        snapshot.setFruits(roomState.getFruits() == null ? new HashSet<>() : new HashSet<>(roomState.getFruits()));
-        snapshot.setSpeedUp(roomState.getSpeedUp() == null ? new HashSet<>() : new HashSet<>(roomState.getSpeedUp()));
-        snapshot.setSpeedDown(roomState.getSpeedDown() == null ? new HashSet<>() : new HashSet<>(roomState.getSpeedDown()));
-        snapshot.setRevealAll(roomState.getRevealAll() == null ? new HashSet<>() : new HashSet<>(roomState.getRevealAll()));
-        snapshot.setFog(roomState.getFog() == null ? new HashSet<>() : new HashSet<>(roomState.getFog()));
-        snapshot.setRoomEmojis(roomState.getRoomEmojis() == null ? new ArrayDeque<>() : new ArrayDeque<>(roomState.getRoomEmojis()));
+        synchronized (roomState) {
+            snapshot.setRoomCode(roomState.getRoomCode());
+            snapshot.setCountdownMin(roomState.getCountdownMin());
+            snapshot.setCountdownSecond(roomState.getCountdownSecond());
+            snapshot.setGameStartTime(roomState.getGameStartTime());
+            snapshot.setStatus(roomState.getStatus());
+            snapshot.setMap(copyMap(roomState.getMap()));
+            snapshot.setSnakes(roomState.getSnakes().stream().map(this::toSnakeSnapshot).toList());
+            snapshot.setFruits(roomState.getFruits() == null ? new HashSet<>() : new HashSet<>(roomState.getFruits()));
+            snapshot.setSpeedUp(roomState.getSpeedUp() == null ? new HashSet<>() : new HashSet<>(roomState.getSpeedUp()));
+            snapshot.setSpeedDown(roomState.getSpeedDown() == null ? new HashSet<>() : new HashSet<>(roomState.getSpeedDown()));
+            snapshot.setRevealAll(roomState.getRevealAll() == null ? new HashSet<>() : new HashSet<>(roomState.getRevealAll()));
+            snapshot.setFog(roomState.getFog() == null ? new HashSet<>() : new HashSet<>(roomState.getFog()));
+            snapshot.setRoomEmojis(roomState.getRoomEmojis() == null ? new ArrayDeque<>() : new ArrayDeque<>(roomState.getRoomEmojis()));
+        }
         return snapshot;
     }
 
@@ -861,23 +829,30 @@ public class BroadcastServiceImpl implements BroadcastService {
     }
 
     private void sendToPage(String pageType, String json) {
+        // 收集目标 session（在调用线程完成），然后一个任务批量发送
+        List<WebSocketSession> targets = new ArrayList<>();
         for (Map.Entry<String, SessionContextDTO> entry : sessionContextManager.getSessionContextMap().entrySet()) {
             SessionContextDTO context = entry.getValue();
             if (context == null || context.getPageType() == null || !pageType.equals(context.getPageType())) {
                 continue;
             }
             WebSocketSession session = context.getSession();
-            if (session == null || !session.isOpen()) {
-                continue;
+            if (session != null) {
+                targets.add(session);
             }
-            final String finalJson = json;
-            roomStateBroadcastExecutor.execute(() -> {
+        }
+        if (targets.isEmpty()) return;
+
+        final String finalJson = json;
+        roomStateBroadcastExecutor.execute(() -> {
+            for (WebSocketSession session : targets) {
+                if (!session.isOpen()) continue;
                 try {
                     session.sendMessage(new TextMessage(finalJson));
                 } catch (IOException e) {
                 }
-            });
-        }
+            }
+        });
     }
 
     private String toJson(Object value) {
@@ -902,39 +877,52 @@ public class BroadcastServiceImpl implements BroadcastService {
 
     @Override
     public void broadcastGroupChatMessage(GroupChatMessageVO msg) {
-        WsResponse<GroupChatMessageVO> response = new WsResponse<>();
-        response.setType("group_chat_message");
-        response.setData(msg);
-
-        // Send to home page users
+        // 全局群聊 — 只推送给 home 页面用户（O(1) 索引查找，避免遍历所有 session）
         WsResponse<GroupChatMessageVO> homeResponse = new WsResponse<>();
         homeResponse.setPageType("home");
         homeResponse.setType("group_chat_message");
         homeResponse.setData(msg);
 
-        // Send to prepare page users
-        WsResponse<GroupChatMessageVO> prepareResponse = new WsResponse<>();
-        prepareResponse.setPageType("prepare");
-        prepareResponse.setType("group_chat_message");
-        prepareResponse.setData(msg);
-
         String homeJson = toJson(homeResponse);
-        String prepareJson = toJson(prepareResponse);
 
-        for (Map.Entry<String, SessionContextDTO> entry : sessionContextManager.getSessionContextMap().entrySet()) {
-            SessionContextDTO context = entry.getValue();
-            if (context == null || context.getPageType() == null) {
+        Set<String> homeUsers = sessionContextManager.getUserCodesByPageType("home");
+        for (String userCode : homeUsers) {
+            String sessionId = sessionContextManager.getUserCodeToSessionIdMap().get(userCode);
+            if (sessionId == null) continue;
+            SessionContextDTO context = sessionContextManager.getSessionContextMap().get(sessionId);
+            if (context == null) continue;
+            WebSocketSession session = context.getSession();
+            if (session != null && session.isOpen()) {
+                sendGroupChatToSession(session, homeJson);
+            }
+        }
+    }
+
+    @Override
+    public void broadcastRoomChat(Integer roomCode, GroupChatMessageVO msg) {
+        // 房间聊天 — 只推送给同房间的 prepare 页面玩家，不持久化，不用 executor
+        Set<String> roomMembers = roomStateManager.getRoomMembers().get(roomCode);
+        if (roomMembers == null || roomMembers.isEmpty()) {
+            return;
+        }
+
+        WsResponse<GroupChatMessageVO> response = new WsResponse<>();
+        response.setPageType("prepare");
+        response.setType("group_chat_message");
+        response.setData(msg);
+        String json = toJson(response);
+
+        for (String userCode : roomMembers) {
+            SessionContextDTO context = getContextByUserCode(userCode);
+            if (context == null || !"prepare".equals(context.getPageType())) {
                 continue;
             }
             WebSocketSession session = context.getSession();
-            if (session == null || !session.isOpen()) {
-                continue;
-            }
-            String pageType = context.getPageType();
-            if ("home".equals(pageType)) {
-                sendGroupChatToSession(session, homeJson);
-            } else if ("prepare".equals(pageType)) {
-                sendGroupChatToSession(session, prepareJson);
+            if (session != null && session.isOpen()) {
+                try {
+                    session.sendMessage(new TextMessage(json));
+                } catch (IOException ignored) {
+                }
             }
         }
     }
@@ -955,11 +943,20 @@ public class BroadcastServiceImpl implements BroadcastService {
     }
 
     private void sendGroupChatToSession(WebSocketSession session, String json) {
-        roomStateBroadcastExecutor.execute(() -> {
-            try {
-                session.sendMessage(new TextMessage(json));
-            } catch (IOException e) {
-            }
-        });
+        // 群聊小文本直接用调用线程发（sendMessage 是异步写 TCP buffer），
+        // 不经 executor 避免高并发时的 submit 开销
+        if (!session.isOpen()) return;
+        try {
+            session.sendMessage(new TextMessage(json));
+        } catch (IOException e) {
+        }
+    }
+
+    @Override
+    public int getBroadcastQueueSize() {
+        if (roomStateBroadcastExecutor instanceof ThreadPoolExecutor tpe) {
+            return tpe.getQueue().size();
+        }
+        return -1;
     }
 }

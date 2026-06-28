@@ -2,6 +2,7 @@ package com.example.snake_back.manager;
 
 import com.example.snake_back.pojo.vo.RoomSummaryVO;
 import jakarta.annotation.PostConstruct;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import java.util.Arrays;
@@ -9,11 +10,15 @@ import java.util.Arrays;
 @Component
 public class RoomSummaryManager {
 
-    private final RoomSummaryVO[] roomSummaries = new RoomSummaryVO[11];
+    @Value("${app.game.room-count:10}")
+    private int roomCount;
+
+    private RoomSummaryVO[] roomSummaries;
 
     @PostConstruct
     public void initRooms() {
-        for (int i = 1; i <= 10; i++) {
+        roomSummaries = new RoomSummaryVO[roomCount + 1];
+        for (int i = 1; i <= roomCount; i++) {
             RoomSummaryVO vo = new RoomSummaryVO();
             vo.setRoomCode(i);
             vo.setPlayerCount(0);
@@ -159,8 +164,8 @@ public class RoomSummaryManager {
     }
 
     private void checkRoomCode(int roomCode) {
-        if (roomCode < 1 || roomCode > 10) {
-            throw new IllegalArgumentException("roomCode must be between 1 and 10");
+        if (roomCode < 1 || roomCode > roomCount) {
+            throw new IllegalArgumentException("roomCode must be between 1 and " + roomCount);
         }
     }
 }

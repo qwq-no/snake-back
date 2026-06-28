@@ -1,10 +1,11 @@
 package com.example.snake_back.controller;
 
-import com.example.snake_back.service.RefreshTokenService;
 import com.example.snake_back.common.result.Result;
+import com.example.snake_back.service.RefreshTokenService;
 import jakarta.servlet.http.Cookie;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseCookie;
 import org.springframework.http.ResponseEntity;
@@ -22,6 +23,9 @@ import java.util.Map;
 @RequestMapping("/api/refresh")
 public class RefreshTokenController {
     private final RefreshTokenService refreshTokenService;
+
+    @Value("${app.cookie.secure}")
+    private boolean cookieSecure;
 
     public RefreshTokenController(RefreshTokenService refreshTokenService) {
         this.refreshTokenService = refreshTokenService;
@@ -45,7 +49,7 @@ public class RefreshTokenController {
         // 写入新的 refresh cookie
         ResponseCookie newCookie = ResponseCookie.from("refresh_token", newPlain)
                 .httpOnly(true)
-                .secure(false)
+                .secure(cookieSecure)
                 .path("/")
                 .maxAge(30L * 24 * 3600)
                 .sameSite("Lax")
@@ -67,7 +71,7 @@ public class RefreshTokenController {
         }
         // 清除 cookie（与设置 cookie 时保持相同 path/domain）
         ResponseCookie expired = ResponseCookie.from("refresh_token", "")
-                .httpOnly(true).secure(false).path("/").maxAge(0).sameSite("Lax").build();
+                .httpOnly(true).secure(cookieSecure).path("/").maxAge(0).sameSite("Lax").build();
         response.addHeader(HttpHeaders.SET_COOKIE, expired.toString());
         return ResponseEntity.ok().body(Result.success());
     }

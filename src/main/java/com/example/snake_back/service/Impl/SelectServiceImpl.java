@@ -7,15 +7,11 @@ import com.example.snake_back.manager.RoomSummaryManager;
 import com.example.snake_back.mapper.UserMapper;
 import com.example.snake_back.pojo.dto.RoomState;
 import com.example.snake_back.pojo.entity.User;
-import com.example.snake_back.pojo.vo.FriendListVO;
 import com.example.snake_back.pojo.vo.RoomSummaryVO;
 import com.example.snake_back.service.BroadcastService;
 import com.example.snake_back.service.OnlineService;
 import com.example.snake_back.service.SelectService;
 import org.springframework.stereotype.Service;
-
-import java.util.List;
-import java.util.Set;
 
 @Service
 public class SelectServiceImpl implements SelectService {
@@ -50,8 +46,10 @@ public class SelectServiceImpl implements SelectService {
         RoomSummaryVO updatedSummary = roomSummaryManager.applyMemberChange(roomCode, userCode, true);
         broadcastService.broadcastRoomSummary(updatedSummary);
         if(roomState.getStatus().equals("playing")){
-            onlineService.assignHumanSnakeToNewPlayer(roomState, userCode);
-            broadcastService.broadcastRoomState(roomState);
+            synchronized (roomState) {
+                onlineService.assignHumanSnakeToNewPlayer(roomState, userCode);
+                broadcastService.broadcastRoomState(roomState);
+            }
         } else if ("finished".equals(roomState.getStatus())) {
             // 游戏已结束：发送房间 snapshot 让新进玩家看到结束画面，但不分配蛇
             broadcastService.broadcastRoomState(roomState);

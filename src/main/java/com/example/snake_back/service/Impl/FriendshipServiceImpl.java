@@ -57,4 +57,26 @@ public class FriendshipServiceImpl implements FriendshipService {
 
         return result;
     }
+
+    @Override
+    public void removeFriend(Integer myUserCode, Integer friendUserCode) {
+        if (myUserCode == null || friendUserCode == null) {
+            throw new RuntimeException("userCode不能为空");
+        }
+
+        LambdaQueryWrapper<Friendship> queryWrapper = new LambdaQueryWrapper<>();
+        queryWrapper.and(wrapper -> wrapper
+                .eq(Friendship::getUserCode1, myUserCode)
+                .eq(Friendship::getUserCode2, friendUserCode)
+                .or()
+                .eq(Friendship::getUserCode1, friendUserCode)
+                .eq(Friendship::getUserCode2, myUserCode));
+
+        Friendship friendship = friendshipMapper.selectOne(queryWrapper);
+        if (friendship == null) {
+            throw new RuntimeException("好友关系不存在");
+        }
+
+        friendshipMapper.deleteById(friendship.getId());
+    }
 }

@@ -17,5 +17,7 @@ public interface BroadcastService {
     void sendRoomSummaries(String userCode);
     void broadcastRoomSummary(RoomSummaryVO roomSummary);
     void broadcastGroupChatMessage(GroupChatMessageVO msg);
+    void broadcastRoomChat(Integer roomCode, GroupChatMessageVO msg);
     void sendGroupChatHistory(String userCode);
+    int getBroadcastQueueSize();
 }

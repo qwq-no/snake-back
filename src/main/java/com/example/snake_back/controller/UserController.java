@@ -6,6 +6,7 @@ import com.example.snake_back.pojo.dto.UserMaxLengthDTO;
 import com.example.snake_back.pojo.dto.UserRegisterDTO;
 import com.example.snake_back.service.UserService;
 import jakarta.servlet.http.HttpServletRequest;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseCookie;
 import org.springframework.http.ResponseEntity;
@@ -13,6 +14,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.Callable;
 
 /**
  * 注册接口（最小示例，接收无校验注解的 DTO）
@@ -22,6 +24,10 @@ import java.util.Map;
 public class UserController {
 
     private final UserService userService;
+
+    @Value("${app.cookie.secure}")
+    private boolean cookieSecure;
+
     public UserController(UserService userService) {
         this.userService = userService;
     }
@@ -36,39 +42,45 @@ public class UserController {
     }
 
     @PostMapping("/login")
-    public ResponseEntity<?> login(@RequestBody UserLoginDTO userLoginDto) {
-        try {
-            Map<String, Object> loginData = userService.login(userLoginDto, "web", "127.0.0.1");
-            String refreshToken = loginData.get("refreshToken").toString();
+    public Callable<ResponseEntity<?>> login(@RequestBody UserLoginDTO userLoginDto, HttpServletRequest request) {
+        // 在 Tomcat 线程提取 clientIp（异步线程中 request 不可用）
+        String clientIp = request.getRemoteAddr();
+        return () -> {
+            try {
+                Map<String, Object> loginData = userService.login(userLoginDto, "web", clientIp);
+                String refreshToken = loginData.get("refreshToken").toString();
 
-            ResponseCookie cookie = ResponseCookie.from("refresh_token", refreshToken)
-                    .httpOnly(true)
-                    .secure(false)
-                    .path("/")
-                    .maxAge(30L * 24 * 3600)
-                    .sameSite("Lax")
-                    .build();
+                ResponseCookie cookie = ResponseCookie.from("refresh_token", refreshToken)
+                        .httpOnly(true)
+                        .secure(cookieSecure)
+                        .path("/")
+                        .maxAge(30L * 24 * 3600)
+                        .sameSite("Lax")
+                        .build();
 
-            Map<String, Object> body = new HashMap<>();
-            body.put("accessToken", loginData.get("accessToken"));
-            body.put("user", loginData.get("user"));
+                Map<String, Object> body = new HashMap<>();
+                body.put("accessToken", loginData.get("accessToken"));
+                body.put("user", loginData.get("user"));
 
-            return ResponseEntity.ok()
-                    .header(HttpHeaders.SET_COOKIE, cookie.toString())
-                    .body(Result.success(body));
-        } catch (Exception e) {
-            return ResponseEntity.ok().body(Result.error(e.getMessage()));
-        }
+                return ResponseEntity.ok()
+                        .header(HttpHeaders.SET_COOKIE, cookie.toString())
+                        .body(Result.success(body));
+            } catch (Exception e) {
+                return ResponseEntity.ok().body(Result.error(e.getMessage()));
+            }
+        };
     }
 
     @PostMapping("/register")
-    public Result<String> register(@RequestBody UserRegisterDTO dto) {
-        try {
-            userService.register(dto);
-            return Result.success();
-        }catch (Exception e){
-            return Result.error(e.getMessage());
-        }
+    public Callable<Result<String>> register(@RequestBody UserRegisterDTO dto) {
+        return () -> {
+            try {
+                userService.register(dto);
+                return Result.success();
+            } catch (Exception e) {
+                return Result.error(e.getMessage());
+            }
+        };
     }
 
     @PostMapping("/getMaxLength")

@@ -2,18 +2,19 @@ package com.example.snake_back.service.Impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.example.snake_back.common.utils.JwtUtil;
+import com.example.snake_back.common.utils.TokenUtil;
 import com.example.snake_back.manager.SessionContextManager;
-import com.example.snake_back.pojo.dto.SessionContextDTO;
-import com.example.snake_back.pojo.dto.UserRegisterDTO;
 import com.example.snake_back.mapper.UserMapper;
+import com.example.snake_back.pojo.dto.SessionContextDTO;
+import com.example.snake_back.pojo.dto.UserLoginDTO;
+import com.example.snake_back.pojo.dto.UserRegisterDTO;
 import com.example.snake_back.pojo.entity.User;
 import com.example.snake_back.service.RefreshTokenService;
 import com.example.snake_back.service.UserService;
-import com.example.snake_back.common.utils.TokenUtil;
-import com.example.snake_back.pojo.dto.UserLoginDTO;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.HashMap;
@@ -39,20 +40,47 @@ public class UserServiceImpl implements UserService {
     }
 
     @Override
-    @Transactional
+    @Transactional(noRollbackFor = IllegalArgumentException.class)
     public Map<String,Object> login(UserLoginDTO dto, String deviceInfo, String ip){
         Map<String,Object> claims = new HashMap<>();
         User exist = userMapper.selectOne(new QueryWrapper<User>().eq("username", dto.getUsername()));
         if (exist == null) {
-            throw new IllegalArgumentException("invalid username or password");
-        }
-        if (dto.getPassword() == null || exist.getPasswordHash() == null
-                || !passwordEncoder.matches(dto.getPassword(), exist.getPasswordHash())) {
-            throw new IllegalArgumentException("invalid username or password");
+            throw new IllegalArgumentException("用户名或密码错误");
         }
 
-        String tokenPlain = refreshTokenService.createAndSaveRefreshToken(exist.getId(), deviceInfo, ip);
         String now = LocalDateTime.now().format(DB_DT);
+
+        // 检查是否在锁定期
+        if (exist.getLockoutUntil() != null && exist.getLockoutUntil().compareTo(now) > 0) {
+            throw new IllegalArgumentException("输入次数太多，请稍后再输入");
+        }
+
+        // 锁已过期，自动清除
+        if (exist.getLockoutUntil() != null && exist.getLockoutUntil().compareTo(now) <= 0) {
+            exist.setFailedLoginCount(0);
+            exist.setLockoutUntil(null);
+            exist.setUpdatedAt(now);
+            userMapper.updateById(exist);
+        }
+
+        if (dto.getPassword() == null || exist.getPasswordHash() == null
+                || !passwordEncoder.matches(dto.getPassword(), exist.getPasswordHash())) {
+            // 密码错误，累加次数
+            int curCount = exist.getFailedLoginCount() == null ? 0 : exist.getFailedLoginCount();
+            int newCount = curCount + 1;
+            exist.setFailedLoginCount(newCount);
+            if (newCount >= 5) {
+                exist.setLockoutUntil(LocalDateTime.now().plusMinutes(5).format(DB_DT));
+            }
+            exist.setUpdatedAt(now);
+            userMapper.updateById(exist);
+            throw new IllegalArgumentException("用户名或密码错误");
+        }
+
+        // 登录成功，清除失败记录
+        exist.setFailedLoginCount(0);
+        exist.setLockoutUntil(null);
+        String tokenPlain = refreshTokenService.createAndSaveRefreshToken(exist.getId(), deviceInfo, ip);
         exist.setLastLoginAt(now);
         exist.setUpdatedAt(now);
         userMapper.updateById(exist);

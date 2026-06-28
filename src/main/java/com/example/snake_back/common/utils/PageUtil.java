@@ -1,10 +1,10 @@
 package com.example.snake_back.common.utils;
 
-import com.example.snake_back.pojo.dto.SessionContextDTO;
-import org.springframework.stereotype.Component;
-import com.example.snake_back.manager.SessionContextManager;
 import com.example.snake_back.manager.RoomStateManager;
+import com.example.snake_back.manager.SessionContextManager;
+import com.example.snake_back.pojo.dto.SessionContextDTO;
 import com.example.snake_back.service.BroadcastService;
+import org.springframework.stereotype.Component;
 
 
 @Component
@@ -36,9 +36,15 @@ public class PageUtil {
 
         String fromPage = sessionContextDTO.getPageType();
         sessionContextDTO.setPageType(pageType);
+        sessionContextManager.moveSessionPageType(userCode, fromPage, pageType);
 
-        Integer roomCode = roomStateManager.getRoomCodeByUserCode(userCode);
-        sessionContextDTO.setRoomCode(roomCode == null ? null : String.valueOf(roomCode));
+        // 只有房间页面才保留 roomCode，切到 home/select 等页面时清掉
+        if ("prepare".equals(pageType) || "online".equals(pageType)) {
+            Integer roomCode = roomStateManager.getRoomCodeByUserCode(userCode);
+            sessionContextDTO.setRoomCode(roomCode == null ? null : String.valueOf(roomCode));
+        } else {
+            sessionContextDTO.setRoomCode(null);
+        }
         sessionContextManager.fitStatus(sessionId);
         sessionContextManager.logSessionContextMap(userCode + " " + fromPage + "→" + pageType);
 

@@ -1,13 +1,13 @@
 package com.example.snake_back.websocket;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.example.snake_back.common.utils.TokenUtil;
 import com.example.snake_back.manager.SessionContextManager;
 import com.example.snake_back.mapper.PrivateMessageMapper;
 import com.example.snake_back.pojo.dto.SessionContextDTO;
+import com.example.snake_back.pojo.dto.WsResponse;
 import com.example.snake_back.pojo.entity.PrivateMessage;
 import com.example.snake_back.pojo.vo.PrivateMessageVO;
-import com.example.snake_back.pojo.dto.WsResponse;
-import com.example.snake_back.common.utils.TokenUtil;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.TextMessage;
@@ -23,6 +23,10 @@ import java.util.stream.Collectors;
 public class TalkHandler {
 
     private static final DateTimeFormatter DB_DT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    private static final int MAX_PAGE_SIZE = 100;
+    private static final int DEFAULT_PAGE_SIZE = 50;
+    private static final int CONTACT_LIST_LIMIT = 50;
+    private static final int CONTACT_QUERY_CAP = 500; // 防止单用户消息量极大时全表扫描
 
     private final SessionContextManager sessionContextManager;
     private final PrivateMessageMapper privateMessageMapper;
@@ -93,7 +97,24 @@ public class TalkHandler {
             return;
         }
 
-        // 查询两人之间的所有消息，按时间排序
+        int page = Math.max(parseIntParam(data, "page", 1), 1);
+        int size = Math.min(parseIntParam(data, "size", DEFAULT_PAGE_SIZE), MAX_PAGE_SIZE);
+
+        // 总数
+        long total = privateMessageMapper.selectCount(
+                new LambdaQueryWrapper<PrivateMessage>()
+                        .and(w -> w
+                                .eq(PrivateMessage::getFromUserCode, myUserCode)
+                                .eq(PrivateMessage::getToUserCode, withUserCode)
+                        )
+                        .or(w -> w
+                                .eq(PrivateMessage::getFromUserCode, withUserCode)
+                                .eq(PrivateMessage::getToUserCode, myUserCode)
+                        )
+        );
+
+        // 分页查询：倒序取最新的一页，反转发给前端按时间正序
+        int offset = (page - 1) * size;
         List<PrivateMessage> messages = privateMessageMapper.selectList(
                 new LambdaQueryWrapper<PrivateMessage>()
                         .and(w -> w
@@ -104,15 +125,26 @@ public class TalkHandler {
                                 .eq(PrivateMessage::getFromUserCode, withUserCode)
                                 .eq(PrivateMessage::getToUserCode, myUserCode)
                         )
-                        .orderByAsc(PrivateMessage::getCreatedAt)
+                        .orderByDesc(PrivateMessage::getCreatedAt)
+                        .last("LIMIT " + offset + "," + size)
         );
 
-        List<PrivateMessageVO> vos = messages.stream().map(this::toVO).collect(Collectors.toList());
+        List<PrivateMessageVO> vos = messages.stream()
+                .map(this::toVO)
+                .collect(Collectors.toList());
+        Collections.reverse(vos);
 
-        WsResponse<List<PrivateMessageVO>> response = new WsResponse<>();
+        Map<String, Object> responseData = new HashMap<>();
+        responseData.put("messages", vos);
+        responseData.put("total", (int) total);
+        responseData.put("page", page);
+        responseData.put("size", size);
+        responseData.put("hasMore", total > (long) page * size);
+
+        WsResponse<Map<String, Object>> response = new WsResponse<>();
         response.setPageType("talk");
         response.setType("private_chat_history");
-        response.setData(vos);
+        response.setData(responseData);
         sendJsonToSession(context.getSession(), response);
     }
 
@@ -122,7 +154,7 @@ public class TalkHandler {
             return;
         }
 
-        // 查询所有与我有私聊记录的用户及其最后消息时间
+        // 加 LIMIT 防止消息量极大时全表扫描，500 条足够覆盖最近联系人
         List<PrivateMessage> allMessages = privateMessageMapper.selectList(
                 new LambdaQueryWrapper<PrivateMessage>()
                         .and(w -> w
@@ -131,6 +163,7 @@ public class TalkHandler {
                                 .eq(PrivateMessage::getToUserCode, myUserCode)
                         )
                         .orderByDesc(PrivateMessage::getCreatedAt)
+                        .last("LIMIT " + CONTACT_QUERY_CAP)
         );
 
         // 去重每个对话对象，保留最新的时间
@@ -143,13 +176,16 @@ public class TalkHandler {
             }
         }
 
-        // 构建联系人列表，按最后消息时间倒序
+        // 构建联系人列表，最多 50 个
         List<Map<String, Object>> contacts = new ArrayList<>();
+        int count = 0;
         for (Map.Entry<Integer, String> entry : contactTimeMap.entrySet()) {
+            if (count >= CONTACT_LIST_LIMIT) break;
             Map<String, Object> contact = new HashMap<>();
             contact.put("userCode", entry.getKey());
             contact.put("lastMsgTime", entry.getValue());
             contacts.add(contact);
+            count++;
         }
 
         WsResponse<List<Map<String, Object>>> response = new WsResponse<>();
@@ -195,6 +231,17 @@ public class TalkHandler {
             return Integer.parseInt(userCode.trim());
         } catch (NumberFormatException e) {
             return null;
+        }
+    }
+
+    private int parseIntParam(Map<String, Object> data, String key, int defaultValue) {
+        Object value = data.get(key);
+        if (value == null) return defaultValue;
+        try {
+            if (value instanceof Number n) return n.intValue();
+            return Integer.parseInt(String.valueOf(value));
+        } catch (NumberFormatException e) {
+            return defaultValue;
         }
     }
 }

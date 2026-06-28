@@ -1,25 +1,40 @@
 package com.example.snake_back.config;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import org.springframework.web.filter.CorsFilter;
 
+import java.util.Arrays;
+import java.util.List;
+
 /**
- * 简单的全局 CORS 配置（仅当前后端分离且前端在不同 origin 时需要）
- * 请将 allowedOrigins 替换为你的前端地址，例如 "https://app.example.com"
+ * 全局 CORS 配置。
+ * 允许的来源通过配置项 app.cors.allowed-origins 控制（默认 http://localhost:5173），
+ * 生产部署时设置环境变量 APP_CORS_ORIGINS 为实际前端域名。
  */
 @Configuration
 public class CorsConfig {
 
+    @Value("${app.cors.allowed-origins}")
+    private String allowedOriginsConfig;
+
     @Bean
     public CorsFilter corsFilter() {
+        List<String> origins = Arrays.stream(allowedOriginsConfig.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .toList();
+
         CorsConfiguration cfg = new CorsConfiguration();
-        cfg.addAllowedOrigin("http://localhost:5173"); // 调试时前端地址；生产替换为真实域
+        for (String origin : origins) {
+            cfg.addAllowedOrigin(origin);
+        }
         cfg.addAllowedHeader("*");
         cfg.addAllowedMethod("*");
-        cfg.setAllowCredentials(true); // 若需要携带 cookie（refresh token），设为 true
+        cfg.setAllowCredentials(true);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", cfg);

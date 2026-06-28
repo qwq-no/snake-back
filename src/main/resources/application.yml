@@ -1,21 +1,38 @@
 server:
-  port: 8086
+  port: ${SERVER_PORT:8086}
 spring:
   datasource:
-    driver-class-name: com.mysql.cj.jdbc.Driver  # MySQL8.x驱动类
-    url: jdbc:mysql://localhost:3306/snake?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai
-    username: root  # 你的MySQL用户名（默认root）
-    password: 123456wang566  # 你的MySQL密码
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: ${DB_URL:jdbc:mysql://localhost:3306/snake?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai}
+    username: ${DB_USER:root}
+    password: ${DB_PASS:123456wang566}
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
   data:
     redis:
-      host: localhost
-      port: 6379
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
       timeout: 3000ms
       lettuce:
         pool:
-          max-active: 8
-          max-idle: 4
-          min-idle: 1
+          max-active: 32
+          max-idle: 8
+          min-idle: 4
+
+# ===== 应用自定义配置 =====
+app:
+  cors:
+    # 允许的前端来源，多个用逗号分隔。生产部署时通过环境变量 APP_CORS_ORIGINS 覆盖
+    allowed-origins: ${APP_CORS_ORIGINS:http://localhost:5173}
+  cookie:
+    # HTTPS 部署时设为 true。通过环境变量 APP_COOKIE_SECURE=true 覆盖
+    secure: ${APP_COOKIE_SECURE:false}
+  game:
+    # 房间总数（1 到 room-count）。压测时可调大，例如 50
+    room-count: ${GAME_ROOM_COUNT:100}
+    # 每个房间最大蛇数（真人 + AI），同时也是每房间最大玩家人数。压测时可调大，例如 20
+    max-snakes: ${GAME_MAX_SNAKES:100}
 
 mybatis-plus:
   mapper-locations: classpath*:/mappers/*.xml

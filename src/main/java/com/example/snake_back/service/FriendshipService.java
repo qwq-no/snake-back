@@ -6,4 +6,5 @@ import java.util.List;
 
 public interface FriendshipService {
     List<FriendListVO> getFriendList(Integer myUserCode);
+    void removeFriend(Integer myUserCode, Integer friendUserCode);
 }

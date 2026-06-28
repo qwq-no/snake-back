@@ -7,8 +7,9 @@ import com.example.snake_back.manager.SessionContextManager;
 import com.example.snake_back.pojo.dto.RoomState;
 import com.example.snake_back.pojo.dto.SnakeState;
 import com.example.snake_back.pojo.vo.RoomSummaryVO;
-import com.example.snake_back.service.PrepareService;
 import com.example.snake_back.service.BroadcastService;
+import com.example.snake_back.service.PrepareService;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -21,6 +22,9 @@ public class PrepareServiceImpl implements PrepareService {
     private final RoomUtil roomUtil;
     private final SessionContextManager sessionContextManager;
     private final BroadcastService broadcastService;
+
+    @Value("${app.game.max-snakes:10}")
+    private int maxSnakes;
 
     Integer MAP_SIZE = 102;
     Integer FRUIT_COUNT = 500;
@@ -61,9 +65,14 @@ public class PrepareServiceImpl implements PrepareService {
             if (readyUsers != null && members != null && readyUsers.size() == members.size()) {
                 RoomState roomState = roomStateManager.getOrInitRoom(roomCode);
                 roomState.setStatus("playing");
-                for (String user :members) {
+                for (String user : members) {
                     String sessionId = sessionContextManager.getUserCodeToSessionIdMap().get(user);
-                    sessionContextManager.getSessionContextMap().get(sessionId).setHeartbeatTimeout(6000L);
+                    if (sessionId == null) continue;
+                    var ctx = sessionContextManager.getSessionContextMap().get(sessionId);
+                    if (ctx != null) {
+                        ctx.setHeartbeatTimeout(15000L);
+                        ctx.setLastHeartbeat(System.currentTimeMillis());
+                    }
                 }
                 initGame(roomCode);
                 RoomState startedRoom = roomStateManager.getOrInitRoom(roomCode);
@@ -87,49 +96,53 @@ public class PrepareServiceImpl implements PrepareService {
         if (roomState == null) {
             roomState = roomStateManager.getOrInitRoom(roomCode);
         }
-        roomState.setGameStartTime(System.currentTimeMillis());
 
+        synchronized (roomState) {
+            roomState.setGameStartTime(System.currentTimeMillis());
 
-        // 1. 清空地图
-        int[][] map = roomState.getMap();
-        for (int row = 0; row < MAP_SIZE; row++) {
-            for (int col = 0; col < MAP_SIZE; col++) {
-                map[row][col] = 0;
+            // 1. 清空地图
+            int[][] map = roomState.getMap();
+            for (int row = 0; row < MAP_SIZE; row++) {
+                for (int col = 0; col < MAP_SIZE; col++) {
+                    map[row][col] = 0;
+                }
             }
+
+            // 2. 画边界
+            for (int i = 0; i < MAP_SIZE; i++) {
+                map[0][i] = 1;
+                map[MAP_SIZE - 1][i] = 1;
+                map[i][0] = 1;
+                map[i][MAP_SIZE - 1] = 1;
+            }
+
+            // 3. 清空水果和道具
+            roomState.getFruits().clear();
+            roomState.getSpeedUp().clear();
+            roomState.getSpeedDown().clear();
+            roomState.getRevealAll().clear();
+            roomState.getFog().clear();
+
+            // 4. 清空蛇
+            roomState.getSnakes().clear();
+
+            // 5. 重置房间状态
+            roomState.setStatus("playing");
+            roomState.setCountdownMin(10);
+            roomState.setCountdownSecond(0);
+
+            // 6. 初始化蛇
+            initSnakes(roomState);
+
+            // 7. 初始化道具
+            initProps(roomState);
+
+            // 8. 初始化水果
+            initFruit(roomState);
+
+            // 9. 立即发送全量快照 + 缓存，后续 gameTick 直接走 delta
+            broadcastService.broadcastRoomState(roomState);
         }
-
-        // 2. 画边界
-        for (int i = 0; i < MAP_SIZE; i++) {
-            map[0][i] = 1;
-            map[MAP_SIZE - 1][i] = 1;
-            map[i][0] = 1;
-            map[i][MAP_SIZE - 1] = 1;
-        }
-
-        // 3. 清空水果和道具
-        roomState.getFruits().clear();
-        roomState.getSpeedUp().clear();
-        roomState.getSpeedDown().clear();
-        roomState.getRevealAll().clear();
-        roomState.getFog().clear();
-
-        // 4. 清空蛇
-        roomState.getSnakes().clear();
-
-        // 5. 重置房间状态
-        roomState.setStatus("playing");
-        roomState.setCountdownMin(10);
-        roomState.setCountdownSecond(0);
-
-        // 6. 初始化蛇
-        initSnakes(roomState);
-
-        // 7. 初始化道具
-        initProps(roomState);
-
-        // 8. 初始化水果
-        initFruit(roomState);
-//        broadcastService.broadcastRoomState(roomState);
     }
 
     private void initFruit(RoomState roomState) {
@@ -161,7 +174,7 @@ public class PrepareServiceImpl implements PrepareService {
         int roomCode = roomState.getRoomCode();
         int playerCount = roomStateManager.getRoomMembers().get(roomCode).size();
 
-        for (int i = 0; i < 10; i++) {
+        for (int i = 0; i < maxSnakes; i++) {
             SnakeState snake = new SnakeState();
 
             snake.setBody(new ArrayList<>());
@@ -199,8 +212,9 @@ public class PrepareServiceImpl implements PrepareService {
 
         // 根据当前 roomUsers 里的真人玩家，建立 userCode -> snakeIndex 映射
         int idx = 0;
+        int snakeCount = roomState.getSnakes().size();
         for (String userCode : roomStateManager.getRoomMembers().get(roomState.getRoomCode())) {
-            if (idx >= playerCount) {
+            if (idx >= playerCount || idx >= snakeCount) {
                 break;
             }
             roomState.getUserCodeToSnakeIndex().put(userCode, idx);

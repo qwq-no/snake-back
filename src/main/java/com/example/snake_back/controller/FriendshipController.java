@@ -24,4 +24,15 @@ public class FriendshipController {
             return Result.error(e.getMessage());
         }
     }
+
+    @DeleteMapping("/remove")
+    public Result<String> removeFriend(@RequestParam Integer myUserCode,
+                                       @RequestParam Integer friendUserCode) {
+        try {
+            friendshipService.removeFriend(myUserCode, friendUserCode);
+            return Result.success();
+        } catch (Exception e) {
+            return Result.error(e.getMessage());
+        }
+    }
 }

@@ -17,4 +17,6 @@ public class SessionContextDTO {
     private long heartbeatTimeout;
     /** 用户本次"上线"的时间戳（刷新页面时保留，心跳过期后重置），用于群聊消息可见范围过滤 */
     private long groupChatJoinTime;
+    /** 客户端 IP，用于连接限流和审计 */
+    private String ip;
 }

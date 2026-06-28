@@ -87,7 +87,7 @@ public class CoreHandler extends TextWebSocketHandler {
             sessionContextService.updateHeartbeat(session.getId());
             return;
         }
-        // 群聊消息，可从任意页面发出
+        // 群聊消息，按 pageType 分流：prepare 房间聊天 vs 全局群聊
         if ("group_chat_send".equals(type)) {
             var context = sessionContextService.getSessionContext(session.getId());
             if (context != null && context.getUserCode() != null) {
@@ -98,8 +98,18 @@ public class CoreHandler extends TextWebSocketHandler {
                     vo.setNickname(context.getNickname() != null ? context.getNickname() : context.getUserCode());
                     vo.setContent(content);
                     vo.setTimestamp(System.currentTimeMillis());
-                    groupChatManager.addMessage(vo);
-                    broadcastService.broadcastGroupChatMessage(vo);
+
+                    if ("prepare".equals(context.getPageType())) {
+                        // 房间聊天：不持久化，只广播给同房间玩家
+                        Integer roomCode = roomStateManager.getRoomCodeByUserCode(context.getUserCode());
+                        if (roomCode != null) {
+                            broadcastService.broadcastRoomChat(roomCode, vo);
+                        }
+                    } else {
+                        // 全局群聊：持久化到 Redis + 广播给 home 用户
+                        groupChatManager.addMessage(vo);
+                        broadcastService.broadcastGroupChatMessage(vo);
+                    }
                 }
             }
             return;

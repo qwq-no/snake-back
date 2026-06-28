@@ -9,18 +9,18 @@ import com.example.snake_back.pojo.dto.RoomState;
 import com.example.snake_back.pojo.dto.SessionContextDTO;
 import com.example.snake_back.pojo.entity.User;
 import com.example.snake_back.service.BroadcastService;
+import com.example.snake_back.service.OnlineService;
 import com.example.snake_back.service.SessionContextService;
+import com.example.snake_back.websocket.ConnectionLimitInterceptor;
+import jakarta.annotation.PreDestroy;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.ConcurrentWebSocketSessionDecorator;
 
-import jakarta.annotation.PreDestroy;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 
+@Slf4j
 @Service
 public class SessionContextServiceImpl implements SessionContextService {
     private static final long DISCONNECT_GRACE_PERIOD_MS = 2000L;
@@ -31,7 +31,9 @@ public class SessionContextServiceImpl implements SessionContextService {
     private final RoomStateManager roomStateManager;
     private final RoomSummaryManager roomSummaryManager;
     private final BroadcastService broadcastService;
+    private final OnlineService onlineService;
     private final UserMapper userMapper;
+    private final ConnectionLimitInterceptor connectionLimitInterceptor;
     private final ScheduledExecutorService cleanupExecutor = Executors.newSingleThreadScheduledExecutor();
     private final ConcurrentHashMap<String, ScheduledFuture<?>> pendingCleanupTasks = new ConcurrentHashMap<>();
 
@@ -39,12 +41,16 @@ public class SessionContextServiceImpl implements SessionContextService {
                                      RoomStateManager roomStateManager,
                                      RoomSummaryManager roomSummaryManager,
                                      BroadcastService broadcastService,
-                                     UserMapper userMapper) {
+                                     OnlineService onlineService,
+                                     UserMapper userMapper,
+                                     ConnectionLimitInterceptor connectionLimitInterceptor) {
         this.sessionContextManager = sessionContextManager;
         this.roomStateManager = roomStateManager;
         this.roomSummaryManager = roomSummaryManager;
         this.broadcastService = broadcastService;
+        this.onlineService = onlineService;
         this.userMapper = userMapper;
+        this.connectionLimitInterceptor = connectionLimitInterceptor;
     }
 
     @PreDestroy
@@ -67,15 +73,10 @@ public class SessionContextServiceImpl implements SessionContextService {
 
         cancelPendingCleanup(userCode);
 
-        String previousSessionId = sessionContextManager.getUserCodeToSessionIdMap().put(userCode, session.getId());
-        if (previousSessionId != null && !previousSessionId.equals(session.getId())) {
-            sessionContextManager.getSessionContextMap().remove(previousSessionId);
-        }
-
-        User user = userMapper.selectOne(new QueryWrapper<User>().eq("user_code", userCode));
+        // 先创建 SessionContextDTO 并放入 map，确保映射存在时上下文一定可用
         SessionContextDTO sessionContextDTO = new SessionContextDTO();
         sessionContextDTO.setUserCode(userCode);
-        sessionContextDTO.setNickname(user == null ? null : user.getDisplayName());
+        sessionContextDTO.setNickname(null);
         WebSocketSession guardedSession = new ConcurrentWebSocketSessionDecorator(
             session,
             WS_SEND_TIME_LIMIT_MS,
@@ -88,8 +89,31 @@ public class SessionContextServiceImpl implements SessionContextService {
         sessionContextDTO.setHeartbeatTimeout(60000L);
         sessionContextDTO.setGroupChatJoinTime(groupChatJoinTime);
         sessionContextDTO.setRoomCode(roomStateManager.getRoomCodeByUserCode(userCode) == null ? null : String.valueOf(roomStateManager.getRoomCodeByUserCode(userCode)));
-
+        // 记录客户端 IP，用于连接限流
+        try {
+            if (session.getRemoteAddress() != null) {
+                sessionContextDTO.setIp(session.getRemoteAddress().getAddress().getHostAddress());
+            }
+        } catch (Exception ignored) {
+        }
         sessionContextManager.getSessionContextMap().put(session.getId(), sessionContextDTO);
+
+        String previousSessionId = sessionContextManager.getUserCodeToSessionIdMap().put(userCode, session.getId());
+        if (previousSessionId != null && !previousSessionId.equals(session.getId())) {
+            sessionContextManager.getSessionContextMap().remove(previousSessionId);
+        }
+
+        // DB 查询 nickname 在上下文已就绪后进行（best-effort，失败不影响功能）
+        try {
+            User user = userMapper.selectOne(new QueryWrapper<User>().eq("user_code", userCode));
+            if (user != null) {
+                sessionContextDTO.setNickname(user.getDisplayName());
+            }
+        } catch (Exception e) {
+            log.warn("Failed to load nickname for userCode={}: {}", userCode, e.getMessage());
+        }
+
+        sessionContextManager.indexSession(userCode, pageType);
         sessionContextManager.fitStatus(session.getId());
         sessionContextManager.logSessionContextMap("registerSession userCode=" + userCode + ", pageType=" + pageType);
         if ("home".equals(pageType)) {
@@ -122,12 +146,18 @@ public class SessionContextServiceImpl implements SessionContextService {
         }
 
         String userCode = sessionContextDTO.getUserCode();
+        String pageType = sessionContextDTO.getPageType();
         if (userCode != null) {
+            sessionContextManager.unindexSession(userCode, pageType);
+            // 清理 IP 连接计数
+            if (sessionContextDTO.getIp() != null) {
+                connectionLimitInterceptor.decrementIp(sessionContextDTO.getIp());
+            }
             String currentSessionId = sessionContextManager.getUserCodeToSessionIdMap().get(userCode);
             if (sessionId.equals(currentSessionId)) {
                 sessionContextManager.getUserCodeToSessionIdMap().remove(userCode);
             }
-            scheduleDeferredCleanup(userCode, sessionId, sessionContextDTO.getPageType());
+            scheduleDeferredCleanup(userCode, sessionId, pageType);
         }
     }
 
@@ -148,14 +178,15 @@ public class SessionContextServiceImpl implements SessionContextService {
 
                 Integer roomCode = roomStateManager.getRoomCodeByUserCode(userCode);
                 if (roomCode != null && isRoomPage(pageType)) {
-                    roomStateManager.removeUserFromRoom(userCode);
-                    roomSummaryManager.applyMemberChange(roomCode, userCode, false);
-
-                    RoomState roomState = roomStateManager.getRoomStates().get(roomCode);
-                    if (roomState != null && "playing".equals(roomState.getStatus())) {
-                        broadcastService.broadcastRoomState(roomState);
+                    if ("online".equals(pageType)) {
+                        onlineService.leaveRoom(userCode);
                     } else {
-                        broadcastService.broadcastRoomLobbyState(roomCode);
+                        roomStateManager.removeUserFromRoom(userCode);
+                        roomSummaryManager.applyMemberChange(roomCode, userCode, false);
+                        RoomState roomState = roomStateManager.getRoomStates().get(roomCode);
+                        if (roomState != null) {
+                            broadcastService.broadcastRoomLobbyState(roomCode);
+                        }
                     }
                 }
             } finally {
