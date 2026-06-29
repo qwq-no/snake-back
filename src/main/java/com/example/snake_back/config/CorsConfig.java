@@ -29,9 +29,9 @@ public class CorsConfig {
                 .toList();
 
         CorsConfiguration cfg = new CorsConfiguration();
-        for (String origin : origins) {
-            cfg.addAllowedOrigin(origin);
-        }
+        // addAllowedOriginPattern("*") 配合 allowCredentials=true 使用，
+        // 支持任意来源（本地开发 + trycloudflare 隧道等动态域名）
+        cfg.addAllowedOriginPattern("*");
         cfg.addAllowedHeader("*");
         cfg.addAllowedMethod("*");
         cfg.setAllowCredentials(true);

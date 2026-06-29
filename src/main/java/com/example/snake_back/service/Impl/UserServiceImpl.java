@@ -118,10 +118,21 @@ public class UserServiceImpl implements UserService {
         user.setDisplayName(dto.getDisplayName());
         user.setIsActive(true);
         user.setFailedLoginCount(0);
+        // 生成唯一 6 位用户编号
+        user.setUserCode(generateUserCode());
         user.setCreatedAt(now);
         user.setUpdatedAt(now);
 
         userMapper.insert(user);
+    }
+
+    private int generateUserCode() {
+        User latest = userMapper.selectOne(
+            new QueryWrapper<User>().orderByDesc("user_code").last("LIMIT 1"));
+        if (latest == null || latest.getUserCode() == null) {
+            return 1;
+        }
+        return latest.getUserCode() + 1;
     }
 
     @Override
