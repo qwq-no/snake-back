@@ -188,4 +188,7 @@ curl http://localhost:8086/api/user/login -X POST \
 
 ---
 
+## 操作提示
+wasd实现蛇的移动，游戏时esc+空格退出游戏。首页右上角设置退出登录。
+
 👈 前端代码见 [qwq-no/snake](https://github.com/qwq-no/snake) | 在线演示：http://124.221.217.168
